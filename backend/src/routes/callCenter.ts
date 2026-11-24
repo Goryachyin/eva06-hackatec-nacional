@@ -5,6 +5,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { requireStaffRole } from "../middleware/rbac";
 import { CaseContextJson, transitionServiceCase } from "../core/stateMachine";
+import { publishSignedGatewayOutbound } from "../queues/whatsappQueue";
 
 const assignSchema = z.object({
   expectedVersion: z.number().int().positive(),
@@ -117,7 +118,13 @@ export async function callCenterRoutes(app: FastifyInstance) {
       const body = confirmSchema.parse(request.body);
       const advisor = request.staffUser!;
 
-      const existing = await prisma.serviceCase.findUniqueOrThrow({ where: { id: caseId } });
+      const existing = await prisma.serviceCase.findUniqueOrThrow({
+        where: { id: caseId },
+        include: {
+          patient: { select: { phone: true } },
+          requester: { select: { phone: true } },
+        },
+      });
       const prevCtx = (existing.contextJson ?? {}) as CaseContextJson;
 
       const folio = `SD-2026-${crypto.randomInt(1000, 9999)}`;
@@ -144,6 +151,21 @@ export async function callCenterRoutes(app: FastifyInstance) {
           advisorNotes: body.advisorNotes ?? null,
         },
       });
+
+      // Notificacion proactiva firmada al Gateway WhatsApp Baileys
+      const notifyPhone = existing.requester?.phone ?? existing.patient.phone;
+      if (notifyPhone) {
+        await publishSignedGatewayOutbound({
+          toPhone: notifyPhone,
+          text:
+            `✅ Tu cita fue confirmada por nuestro Call Center (${advisor.fullName}):\n` +
+            `• Folio: ${folio}\n` +
+            `• Estudio: ${prevCtx.study?.name ?? "Estudio"}\n` +
+            `• Clínica: ${prevCtx.clinic?.name ?? "Clínica"}\n` +
+            `• Preparación: ${prevCtx.study?.prep ?? "Presentarse 15 min antes."}`,
+          correlationId,
+        });
+      }
 
       return { case: updatedCase, folio, qrPayload, correlationId };
     }

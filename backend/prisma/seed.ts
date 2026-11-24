@@ -53,13 +53,18 @@ async function main() {
     },
   });
 
-  // 2. Paciente demo oficial del caso de uso ("Ana") con los 9 campos del registro
+  // 2. Paciente demo oficial del caso de uso ("Ana") con los 9 campos del registro + cuenta portal
   const anaPhone = "+526670000001";
   const anaCurp = "MORA950412MSLRRN01";
+  const anaEmail = "ana@saluddigna.demo";
+  const anaPassword = await bcrypt.hash("Paciente2026!", 10);
 
   const ana = await prisma.patient.upsert({
     where: { curp: anaCurp },
-    update: {},
+    update: {
+      email: anaEmail,
+      passwordHash: anaPassword,
+    },
     create: {
       firstName: "Ana Sofía",
       paternalLastName: "Morales",
@@ -70,12 +75,33 @@ async function main() {
       country: "México",
       curp: anaCurp,
       phone: anaPhone,
+      email: anaEmail,
+      passwordHash: anaPassword,
     },
   });
 
   // 3. Identity Links (Identity Resolution con hash + mascara PII)
   const phoneHash = hashIdentifier(anaPhone);
   const curpHash = hashIdentifier(anaCurp);
+  const emailHash = hashIdentifier(anaEmail);
+
+  await prisma.identityLink.upsert({
+    where: {
+      uq_identity_type_hash: {
+        identifierType: IdentifierType.EMAIL,
+        identifierHash: emailHash,
+      },
+    },
+    update: {},
+    create: {
+      patientId: ana.id,
+      identifierType: IdentifierType.EMAIL,
+      identifierHash: emailHash,
+      identifierMasked: "an***@saluddigna.demo",
+      verified: true,
+      verifiedAt: new Date(),
+    },
+  });
 
   await prisma.identityLink.upsert({
     where: {

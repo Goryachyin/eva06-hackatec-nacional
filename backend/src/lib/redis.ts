@@ -2,9 +2,10 @@ import Redis from "ioredis";
 import { env } from "../config/env";
 
 export const JOURNEY_PUBSUB_CHANNEL = "journey:events";
+export const WHATSAPP_OUTBOUND_PUBSUB_CHANNEL = "whatsapp:outbound";
 
 /**
- * Cliente Redis principal para operaciones atomicas (SETNX wamid, OTP TTL, Publish).
+ * Cliente Redis principal para operaciones atomicas (SETNX, OTP TTL, Publish).
  */
 export const redis = new Redis(env.REDIS_URL, {
   maxRetriesPerRequest: null,
@@ -12,8 +13,8 @@ export const redis = new Redis(env.REDIS_URL, {
 });
 
 /**
- * Cliente Redis dedicado a suscripcion Pub/Sub para difusion SSE stateless.
- * En Redis un cliente en modo SUBSCRIBE no puede ejecutar otros comandos.
+ * Cliente Redis dedicado a suscripcion Pub/Sub para difusion SSE stateless
+ * (Admin, Pacientes y Gateway WhatsApp Baileys).
  */
 export const redisSubscriber = new Redis(env.REDIS_URL, {
   maxRetriesPerRequest: null,

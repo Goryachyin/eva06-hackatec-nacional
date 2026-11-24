@@ -11,8 +11,9 @@ import { InvalidStateTransitionError, OptimisticLockError } from "./core/stateMa
 import { startWhatsAppWorker } from "./queues/whatsappQueue";
 import { healthRoutes } from "./routes/health";
 import { authRoutes } from "./routes/auth";
+import { patientAuthRoutes } from "./routes/patientAuth";
 import { webChannelRoutes } from "./routes/webChannel";
-import { whatsappRoutes } from "./routes/whatsappWebhook";
+import { whatsappGatewayRoutes } from "./routes/whatsappGateway";
 import { otp2faRoutes } from "./routes/otp2fa";
 import { callCenterRoutes } from "./routes/callCenter";
 import { adminRoutes } from "./routes/admin";
@@ -49,7 +50,7 @@ async function buildServer() {
       info: {
         title: "Salud Digna — Cerebro Orquestador Omnicanal API",
         description:
-          "API REST, Webhooks seguros Meta Cloud API (HMAC-SHA256 + wamid SETNX + BullMQ/DLQ) y Streaming SSE (Redis Pub/Sub). Arquitectura determinística y stateless para HackaTec 2026.",
+          "API REST, Gateway WhatsApp Baileys firmado extremo a extremo (HMAC-SHA256 + idempotencia Redis + BullMQ/DLQ), Multibeneficiario con privacidad clínica y Streaming SSE (Redis Pub/Sub). Arquitectura determinística y stateless — Beta v2.",
         version: "1.0.0",
       },
       components: {
@@ -104,8 +105,9 @@ async function buildServer() {
   // Registro modular de rutas
   await app.register(healthRoutes);
   await app.register(authRoutes);
+  await app.register(patientAuthRoutes);
   await app.register(webChannelRoutes);
-  await app.register(whatsappRoutes);
+  await app.register(whatsappGatewayRoutes);
   await app.register(otp2faRoutes);
   await app.register(callCenterRoutes);
   await app.register(adminRoutes);

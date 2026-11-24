@@ -13,7 +13,6 @@
 import crypto from "crypto";
 
 const BASE_URL = process.env.TEST_BASE_URL || "http://localhost:3000";
-const APP_SECRET = process.env.META_APP_SECRET || "";
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
@@ -27,22 +26,23 @@ function assert(cond: boolean, message: string) {
   }
 }
 
-async function test1_WebhookHmacRejected() {
-  if (!APP_SECRET) {
-    console.log("  [SKIP parcial] META_APP_SECRET vacio en .env -> probando rechazo HTTP 500/401 sin firma...");
-  }
-  const payload = JSON.stringify({ entry: [] });
-  const res = await fetch(`${BASE_URL}/webhooks/whatsapp`, {
+async function test1_GatewayHmacRejected() {
+  const payload = JSON.stringify({
+    messageId: "msg_invalid_sig",
+    fromPhone: "+526670000001",
+    text: "Intento sin firma valida",
+  });
+  const res = await fetch(`${BASE_URL}/api/gateways/whatsapp/inbound`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-hub-signature-256": "sha256=firma_falsa_invalida_1234567890",
+      "x-gateway-timestamp": String(Math.floor(Date.now() / 1000)),
+      "x-gateway-signature": "v1=firma_falsa_invalida_1234567890",
     },
     body: payload,
   });
-  const expectedOk = APP_SECRET ? res.status === 401 : res.status === 401 || res.status === 500;
-  assert(expectedOk, `Se esperaba 401 (o 500 si falta secret), se obtuvo ${res.status}`);
-  console.log(`✅ [1/5] Seguridad HMAC-SHA256: petición con firma inválida rechazada (HTTP ${res.status}).`);
+  assert(res.status === 401, `Se esperaba 401, se obtuvo ${res.status}`);
+  console.log(`✅ [1/5] Seguridad Gateway HMAC-SHA256 E2E: petición con firma inválida rechazada (HTTP ${res.status}).`);
 }
 
 async function test2_WamidIdempotency() {
@@ -200,7 +200,7 @@ async function main() {
   const health = await fetch(`${BASE_URL}/health`);
   assert(health.status === 200, `El servidor en ${BASE_URL}/health no está saludable (${health.status})`);
 
-  await test1_WebhookHmacRejected();
+  await test1_GatewayHmacRejected();
   await test2_WamidIdempotency();
   await test3_OptimisticConcurrency();
   await test4_StepUpOtpSecurity();

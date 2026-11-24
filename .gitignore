@@ -17,3 +17,8 @@ npm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Sesion local Baileys WhatsApp Gateway (nunca subir credenciales)
+whatsapp-gateway/auth_info/
+whatsapp-gateway/node_modules/
+whatsapp-gateway/.env

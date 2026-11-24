@@ -1,12 +1,13 @@
 // ============================================================================
-// Reto Salud Digna x TecNM HackaTec Nacional
+// Reto Salud Digna x TecNM HackaTec Nacional — Beta v2
 // Orquestacion Omnicanal de Atencion: Un paciente, una sola conversacion
 //
 // Nucleo Relacional: PostgreSQL 16 + Prisma ORM
-// Nota arquitectonica:
-//   - Los retos Step-Up OTP (TTL 300s) y la idempotencia de webhooks WhatsApp
-//     (wamid con SETNX + TTL 86400s) viven en Redis 7 (no en PostgreSQL) para
-//     mantener baja latencia, expiracion automatica y escalabilidad stateless.
+// Arquitectura Multibeneficiario (Titular != Paciente Beneficiario):
+//   - Un mismo telefono/cuenta (Titular) puede gestionar citas para familiares
+//     o conocidos preservando expedientes clinicos separados por CURP.
+//   - Retos Step-Up OTP (TTL 300s) e idempotencia de mensajes (SETNX TTL 24h)
+//     viven en Redis 7.
 // ============================================================================
 
 generator client {
@@ -19,10 +20,9 @@ datasource db {
 }
 
 // ============================================================================
-// ENUMS CANONICOS (100% alineados con Catálogo de Eventos y Diagramas Fase 1)
+// ENUMS CANONICOS
 // ============================================================================
 
-/// Tipo de identificador agnostico al canal para Identity Stitching
 enum IdentifierType {
   WEB_SESSION
   PHONE
@@ -31,7 +31,6 @@ enum IdentifierType {
   APP
 }
 
-/// Genero del paciente en registro Salud Digna
 enum Gender {
   MASCULINO
   FEMENINO
@@ -39,7 +38,16 @@ enum Gender {
   NO_ESPECIFICADO
 }
 
-/// Canales de atencion conectados via Channel Adapters
+enum RelationshipType {
+  SELF
+  HIJO_A
+  PADRE_MADRE
+  CONYUGE
+  ABUELO_A
+  FAMILIAR
+  CONOCIDO
+}
+
 enum Channel {
   WEB
   WHATSAPP
@@ -48,7 +56,6 @@ enum Channel {
   SYSTEM
 }
 
-/// Conjunto canonico unico de 8 estados de la Maquina de Estados
 enum CaseState {
   INICIADO
   COTIZANDO
@@ -60,7 +67,6 @@ enum CaseState {
   CITA_CONFIRMADA
 }
 
-/// Actor que origina un evento en el Audit Trail
 enum ActorRole {
   PATIENT
   BOT
@@ -69,7 +75,6 @@ enum ActorRole {
   SYSTEM
 }
 
-/// Catalogo oficial de eventos omnicanal (13 eventos)
 enum EventType {
   SESSION_STARTED
   STUDY_QUOTED
@@ -86,7 +91,6 @@ enum EventType {
   APPOINTMENT_CONFIRMED
 }
 
-/// Roles operativos protegidos por RBAC + JWT
 enum StaffRole {
   ASESOR
   ADMIN
@@ -96,9 +100,9 @@ enum StaffRole {
 // MODELOS RELACIONALES (POSTGRESQL 16)
 // ============================================================================
 
-/// Identidad maestra unica del paciente entre todos los canales
-/// Los campos de perfil son opcionales (?) para soportar sesiones anonimas iniciales
-/// y enriquecimiento progresivo (Identity Stitching) sin duplicar registros.
+/// Expediente clinico individual (9 campos oficiales Salud Digna + cuenta opcional).
+/// phone NO es unico para permitir que familiares/conocidos compartan numero de contacto
+/// mientras cada paciente mantiene su propia CURP y expediente clinico separado.
 model Patient {
   id               String    @id @default(uuid()) @db.Uuid
   firstName        String?   @map("nombres") @db.VarChar(120)
@@ -109,16 +113,40 @@ model Patient {
   birthState       String?   @map("estado_nacimiento") @db.VarChar(80)
   country          String    @default("México") @map("pais") @db.VarChar(80)
   curp             String?   @unique @map("curp") @db.VarChar(18)
-  phone            String?   @unique @map("telefono") @db.VarChar(20)
+  phone            String?   @map("telefono") @db.VarChar(20)
+  email            String?   @unique @map("email") @db.VarChar(180)
+  passwordHash     String?   @map("password_hash") @db.VarChar(255)
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  identityLinks IdentityLink[]
-  serviceCases  ServiceCase[]
-  journeyEvents JourneyEvent[]
+  identityLinks         IdentityLink[]
+  serviceCases          ServiceCase[]         @relation("BeneficiaryCases")
+  requestedCases        ServiceCase[]         @relation("RequesterCases")
+  journeyEvents         JourneyEvent[]
+  managedBeneficiaries  PatientRelationship[] @relation("HolderRelationships")
+  managedByHolders      PatientRelationship[] @relation("BeneficiaryRelationships")
 
+  @@index([phone], name: "idx_patients_phone")
   @@index([paternalLastName, maternalLastName, firstName], name: "idx_patients_full_name")
   @@map("patients")
+}
+
+/// Relacion autorizada Titular -> Beneficiario (familiar/conocido) con consentimiento auditado
+model PatientRelationship {
+  id                   String           @id @default(uuid()) @db.Uuid
+  holderPatientId      String           @map("holder_patient_id") @db.Uuid
+  beneficiaryPatientId String           @map("beneficiary_patient_id") @db.Uuid
+  relationship         RelationshipType @default(FAMILIAR)
+  consentAccepted      Boolean          @default(true) @map("consent_accepted")
+  consentAcceptedAt    DateTime         @default(now()) @map("consent_accepted_at") @db.Timestamptz(6)
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  holder      Patient @relation("HolderRelationships", fields: [holderPatientId], references: [id], onDelete: Cascade)
+  beneficiary Patient @relation("BeneficiaryRelationships", fields: [beneficiaryPatientId], references: [id], onDelete: Cascade)
+
+  @@unique([holderPatientId, beneficiaryPatientId], name: "uq_holder_beneficiary")
+  @@index([holderPatientId], name: "idx_relationships_holder")
+  @@map("patient_relationships")
 }
 
 /// Vinculacion multicanal (Identity Resolution + proteccion PII en monitoreo)
@@ -126,9 +154,7 @@ model IdentityLink {
   id               String         @id @default(uuid()) @db.Uuid
   patientId        String         @map("patient_id") @db.Uuid
   identifierType   IdentifierType @map("identifier_type")
-  /// Hash HMAC/SHA-256 con pepper del servidor para busqueda exacta sin exponer PII
   identifierHash   String         @map("identifier_hash") @db.VarChar(128)
-  /// Version enmascarada segura para Tablero Admin (ej. ***-***-2790, a***@demo.com)
   identifierMasked String         @map("identifier_masked") @db.VarChar(120)
   verified         Boolean        @default(false)
   verifiedAt       DateTime?      @map("verified_at") @db.Timestamptz(6)
@@ -141,27 +167,30 @@ model IdentityLink {
   @@map("identity_links")
 }
 
-/// Tramite vivo del paciente: estado canonico, contexto JSONB y concurrencia optimista
+/// Tramite vivo: separa Beneficiario (patientId) de Titular solicitante (requesterPatientId)
 model ServiceCase {
-  id                String    @id @default(uuid()) @db.Uuid
-  patientId         String    @map("patient_id") @db.Uuid
-  journeyId         String    @unique @default(uuid()) @map("journey_id") @db.Uuid
-  caseType          String    @default("CITA_ESTUDIO") @map("case_type") @db.VarChar(60)
-  currentState      CaseState @default(INICIADO) @map("current_state")
-  currentChannel    Channel   @map("current_channel")
-  /// Datos parciales o completos del tramite (estudio, clinica, horario, dudas, folio, resumen IA)
-  contextJson       Json      @default("{}") @map("context_json") @db.JsonB
-  /// Bloqueo optimista: incrementar en cada transicion verificando WHERE id = ? AND version = ?
-  version           Int       @default(1)
-  assignedAdvisorId String?   @map("assigned_advisor_id") @db.Uuid
-  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                 String    @id @default(uuid()) @db.Uuid
+  patientId          String    @map("patient_id") @db.Uuid
+  requesterPatientId String?   @map("requester_patient_id") @db.Uuid
+  relationshipLabel  String?   @map("relationship_label") @db.VarChar(40)
+  thirdPartyConsent  Boolean   @default(false) @map("third_party_consent")
+  journeyId          String    @unique @default(uuid()) @map("journey_id") @db.Uuid
+  caseType           String    @default("CITA_ESTUDIO") @map("case_type") @db.VarChar(60)
+  currentState       CaseState @default(INICIADO) @map("current_state")
+  currentChannel     Channel   @map("current_channel")
+  contextJson        Json      @default("{}") @map("context_json") @db.JsonB
+  version            Int       @default(1)
+  assignedAdvisorId  String?   @map("assigned_advisor_id") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  patient         Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patient         Patient        @relation("BeneficiaryCases", fields: [patientId], references: [id], onDelete: Cascade)
+  requester       Patient?       @relation("RequesterCases", fields: [requesterPatientId], references: [id], onDelete: SetNull)
   assignedAdvisor StaffUser?     @relation("AdvisorAssignedCases", fields: [assignedAdvisorId], references: [id], onDelete: SetNull)
   journeyEvents   JourneyEvent[]
 
   @@index([patientId, currentState], name: "idx_cases_patient_state")
+  @@index([requesterPatientId, currentState], name: "idx_cases_requester_state")
   @@index([currentState, updatedAt], name: "idx_cases_state_updated")
   @@index([assignedAdvisorId], name: "idx_cases_advisor")
   @@map("service_cases")
@@ -173,7 +202,6 @@ model JourneyEvent {
   caseId        String     @map("case_id") @db.Uuid
   patientId     String     @map("patient_id") @db.Uuid
   journeyId     String     @map("journey_id") @db.Uuid
-  /// Identificador de traza distribuida (HTTP/Webhook -> BullMQ -> Worker -> Redis Pub/Sub -> SSE)
   correlationId String     @map("correlation_id") @db.Uuid
   channel       Channel
   actorRole     ActorRole  @map("actor_role")
@@ -194,7 +222,7 @@ model JourneyEvent {
   @@map("journey_events")
 }
 
-/// Usuarios operativos del sistema con control de acceso RBAC (Asesor Call Center y Administrador)
+/// Usuarios operativos del sistema con control de acceso RBAC
 model StaffUser {
   id           String    @id @default(uuid()) @db.Uuid
   email        String    @unique @db.VarChar(180)

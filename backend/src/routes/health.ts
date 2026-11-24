@@ -72,7 +72,7 @@ export async function healthRoutes(app: FastifyInstance) {
     {
       schema: {
         tags: ["Sistema"],
-        summary: "Política de Privacidad pública requerida por Meta for Developers para publicar la app",
+        summary: "Política de Privacidad pública del ecosistema omnicanal Salud Digna",
       },
     },
     async (_request, reply) => {

@@ -1,4 +1,12 @@
-import { ActorRole, Channel, EventType, Gender, IdentifierType, Patient } from "@prisma/client";
+import {
+  ActorRole,
+  Channel,
+  EventType,
+  Gender,
+  IdentifierType,
+  Patient,
+  RelationshipType,
+} from "@prisma/client";
 import { env } from "../config/env";
 import { prisma } from "../lib/prisma";
 import { redis } from "../lib/redis";
@@ -11,6 +19,16 @@ import {
   normalizePhone,
 } from "../lib/crypto";
 import { recordAndPublishEvent } from "./eventBus";
+
+export const RELATIONSHIP_LABELS: Record<RelationshipType, string> = {
+  SELF: "Titular",
+  HIJO_A: "Hijo/a",
+  PADRE_MADRE: "Padre / Madre",
+  CONYUGE: "Cónyuge",
+  ABUELO_A: "Abuelo/a",
+  FAMILIAR: "Familiar",
+  CONOCIDO: "Conocido",
+};
 
 export interface RegisterPatientInput {
   firstName?: string;
@@ -49,10 +67,6 @@ export interface OutboxOtpEntry {
   expiresAt: string;
 }
 
-/**
- * Vincula un identificador (PHONE, EMAIL, CURP, WEB_SESSION, APP) a un paciente
- * almacenando siempre hash HMAC y mascara PII.
- */
 export async function upsertIdentityLink(
   patientId: string,
   identifierType: IdentifierType,
@@ -90,9 +104,6 @@ export async function upsertIdentityLink(
   });
 }
 
-/**
- * Busca un paciente por cualquier identificador soportado (Identity Resolution).
- */
 export async function findPatientByIdentifier(
   identifierType: IdentifierType,
   rawValue: string
@@ -116,19 +127,23 @@ export async function findPatientByIdentifier(
 
   if (link?.patient) return link.patient;
 
-  // Respaldo directo en tabla patients si vino por phone o curp
   if (identifierType === IdentifierType.PHONE) {
-    return prisma.patient.findUnique({ where: { phone: normalized } });
+    return prisma.patient.findFirst({
+      where: { phone: normalized },
+      orderBy: { createdAt: "asc" },
+    });
   }
   if (identifierType === IdentifierType.CURP) {
     return prisma.patient.findUnique({ where: { curp: normalized } });
+  }
+  if (identifierType === IdentifierType.EMAIL) {
+    return prisma.patient.findUnique({ where: { email: rawValue.trim().toLowerCase() } });
   }
   return null;
 }
 
 /**
- * Identity Stitching progresivo: busca por CURP -> PHONE -> WEB_SESSION -> EMAIL;
- * si existe, enriquece el perfil faltante; si no existe, crea el registro maestro.
+ * Identity Stitching progresivo para el Titular de la cuenta / telefono.
  */
 export async function resolveOrCreatePatient(input: RegisterPatientInput): Promise<Patient> {
   const normalizedPhone = input.phone ? normalizePhone(input.phone) : undefined;
@@ -172,7 +187,6 @@ export async function resolveOrCreatePatient(input: RegisterPatientInput): Promi
     });
   }
 
-  // Vincular todos los identificadores proporcionados
   if (normalizedPhone) {
     await upsertIdentityLink(patient.id, IdentifierType.PHONE, normalizedPhone, false);
   }
@@ -190,9 +204,88 @@ export async function resolveOrCreatePatient(input: RegisterPatientInput): Promi
 }
 
 /**
+ * Resuelve o crea un expediente clinico INDEPENDIENTE para un Beneficiario (familiar/conocido)
+ * sin sobreescribir nunca los datos ni la identidad PHONE del Titular.
+ */
+export async function resolveOrCreateBeneficiary(params: {
+  holder: Patient;
+  relationship: RelationshipType;
+  consentAccepted: boolean;
+  beneficiary: {
+    firstName: string;
+    paternalLastName: string;
+    maternalLastName?: string;
+    birthDate?: string;
+    gender?: Gender;
+    birthState?: string;
+    country?: string;
+    curp: string;
+    phone?: string;
+  };
+}): Promise<{ beneficiary: Patient; relationshipLabel: string }> {
+  const cleanCurp = params.beneficiary.curp.trim().toUpperCase();
+  const contactPhone = params.beneficiary.phone
+    ? normalizePhone(params.beneficiary.phone)
+    : params.holder.phone ?? undefined;
+
+  let beneficiary = await findPatientByIdentifier(IdentifierType.CURP, cleanCurp);
+
+  const profileData = {
+    firstName: params.beneficiary.firstName.trim(),
+    paternalLastName: params.beneficiary.paternalLastName.trim(),
+    ...(params.beneficiary.maternalLastName
+      ? { maternalLastName: params.beneficiary.maternalLastName.trim() }
+      : {}),
+    ...(params.beneficiary.birthDate ? { birthDate: new Date(params.beneficiary.birthDate) } : {}),
+    ...(params.beneficiary.gender ? { gender: params.beneficiary.gender } : {}),
+    ...(params.beneficiary.birthState ? { birthState: params.beneficiary.birthState.trim() } : {}),
+    country: params.beneficiary.country?.trim() || "MÉXICO",
+    curp: cleanCurp,
+    ...(contactPhone ? { phone: contactPhone } : {}),
+  };
+
+  if (!beneficiary) {
+    beneficiary = await prisma.patient.create({ data: profileData });
+  } else {
+    beneficiary = await prisma.patient.update({
+      where: { id: beneficiary.id },
+      data: profileData,
+    });
+  }
+
+  // El beneficiario queda indexado unicamente por su propia CURP (no roba el PHONE del Titular)
+  await upsertIdentityLink(beneficiary.id, IdentifierType.CURP, cleanCurp, false);
+
+  if (beneficiary.id !== params.holder.id) {
+    await prisma.patientRelationship.upsert({
+      where: {
+        uq_holder_beneficiary: {
+          holderPatientId: params.holder.id,
+          beneficiaryPatientId: beneficiary.id,
+        },
+      },
+      update: {
+        relationship: params.relationship,
+        consentAccepted: params.consentAccepted,
+        consentAcceptedAt: new Date(),
+      },
+      create: {
+        holderPatientId: params.holder.id,
+        beneficiaryPatientId: beneficiary.id,
+        relationship: params.relationship,
+        consentAccepted: params.consentAccepted,
+      },
+    });
+  }
+
+  return {
+    beneficiary,
+    relationshipLabel: RELATIONSHIP_LABELS[params.relationship] || "Familiar",
+  };
+}
+
+/**
  * Emite un reto Step-Up OTP en Redis con TTL (300s por defecto).
- * El codigo NUNCA se devuelve en la respuesta del canal solicitante:
- * se deposita en la Consola 2FA externa (/otp-2fa) para demostrar 2FA out-of-band.
  */
 export async function issueOtpChallenge(params: {
   patient: Patient;
@@ -200,6 +293,7 @@ export async function issueOtpChallenge(params: {
   journeyId: string;
   channel: Channel;
   correlationId?: string;
+  destinationPhone?: string | null;
 }) {
   const code = generateOtp6();
   const otpHash = hashOtp(params.patient.id, code);
@@ -218,12 +312,12 @@ export async function issueOtpChallenge(params: {
 
   await redis.set(OTP_KEY(params.patient.id), JSON.stringify(record), "EX", ttl);
 
-  // Bandeja externa simulada de SMS/Correo (Consola 2FA independiente)
+  const targetPhone = params.destinationPhone ?? params.patient.phone;
   const outboxEntry: OutboxOtpEntry = {
     patientId: params.patient.id,
     patientMasked: maskPatientName(params.patient.firstName, params.patient.paternalLastName),
-    destinationMasked: params.patient.phone
-      ? maskIdentifier(IdentifierType.PHONE, params.patient.phone)
+    destinationMasked: targetPhone
+      ? maskIdentifier(IdentifierType.PHONE, targetPhone)
       : "***-***-****",
     code,
     channel: params.channel,
@@ -252,10 +346,6 @@ export async function issueOtpChallenge(params: {
   return { expiresAt: expiresAt.toISOString(), ttlSeconds: ttl };
 }
 
-/**
- * Verifica el codigo OTP en Redis.
- * Si falla o expira, audita obligatoriamente OTP_VALIDATION_FAILED en journey_events.
- */
 export async function verifyOtpChallenge(params: {
   patientId: string;
   caseId: string;
@@ -325,7 +415,6 @@ export async function verifyOtpChallenge(params: {
     };
   }
 
-  // OTP valido: consumir reto inmediatamente (single-use)
   await redis.del(OTP_KEY(params.patientId));
   await redis.hdel(OTP_OUTBOX_KEY, params.patientId);
 
@@ -348,9 +437,6 @@ export async function verifyOtpChallenge(params: {
   return { ok: true };
 }
 
-/**
- * Devuelve los codigos OTP activos para la Consola 2FA externa (/otp-2fa).
- */
 export async function listActiveOtpOutbox(): Promise<Array<OutboxOtpEntry & { ttlSeconds: number }>> {
   const all = await redis.hgetall(OTP_OUTBOX_KEY);
   const results: Array<OutboxOtpEntry & { ttlSeconds: number }> = [];

@@ -19,7 +19,7 @@ export interface EmitEventInput {
 
 /**
  * Registra un evento inmutable en PostgreSQL (journey_events) y lo publica
- * al canal distribuido Redis Pub/Sub para difusion SSE stateless.
+ * al canal distribuido Redis Pub/Sub para difusion SSE stateless (Admin y Pacientes).
  */
 export async function recordAndPublishEvent(input: EmitEventInput) {
   const correlationId = input.correlationId ?? crypto.randomUUID();
@@ -41,13 +41,25 @@ export async function recordAndPublishEvent(input: EmitEventInput) {
       patient: {
         select: { firstName: true, paternalLastName: true },
       },
+      serviceCase: {
+        select: {
+          requesterPatientId: true,
+          relationshipLabel: true,
+          thirdPartyConsent: true,
+        },
+      },
     },
   });
 
-  // Mensaje seguro para observabilidad SSE (siempre con PII enmascarada)
   const broadcastPayload = {
     id: event.id,
     caseId: event.caseId,
+    patientId: event.patientId,
+    requesterPatientId: event.serviceCase.requesterPatientId ?? event.patientId,
+    relationshipLabel: event.serviceCase.relationshipLabel ?? "Titular",
+    isThirdParty:
+      Boolean(event.serviceCase.requesterPatientId) &&
+      event.serviceCase.requesterPatientId !== event.patientId,
     journeyId: event.journeyId,
     correlationId: event.correlationId,
     patientMasked: maskPatientName(event.patient.firstName, event.patient.paternalLastName),

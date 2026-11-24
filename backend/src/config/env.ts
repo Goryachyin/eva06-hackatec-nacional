@@ -16,11 +16,12 @@ const envSchema = z.object({
   OTP_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),
   WAMID_TTL_SECONDS: z.coerce.number().int().positive().default(86400),
 
-  WHATSAPP_API_VERSION: z.string().default("v21.0"),
-  WHATSAPP_PHONE_NUMBER_ID: z.string().default(""),
-  WHATSAPP_ACCESS_TOKEN: z.string().default(""),
-  WHATSAPP_VERIFY_TOKEN: z.string().default("salud_digna_webhook_verify_2026"),
-  META_APP_SECRET: z.string().default(""),
+  // Firma digital extremo a extremo (HMAC-SHA256) entre Gateway Baileys Local <-> Cerebro Orquestador
+  WHATSAPP_GATEWAY_SECRET: z
+    .string()
+    .min(16, "WHATSAPP_GATEWAY_SECRET debe tener al menos 16 caracteres")
+    .default("sd_e2e_gateway_hmac_secret_2026_local"),
+  GATEWAY_SIGNATURE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
 });
 
 const parsed = envSchema.safeParse(process.env);
