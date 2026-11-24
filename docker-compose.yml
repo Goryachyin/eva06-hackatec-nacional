@@ -1,0 +1,99 @@
+# ============================================================================
+# Reto Salud Digna x TecNM HackaTec 2026
+# Cerebro Orquestador Omnicanal — Stack Local y AWS EC2
+# Servicios: PostgreSQL 16 + Redis 7 (BullMQ / TTL-SETNX / PubSub-SSE) +
+#            Backend (Node.js TS / Fastify) + Frontend (React / Vite)
+# ============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sd_omnicanal_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-saluddigna}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-saluddigna_dev_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-omnicanal}
+      TZ: America/Mazatlan
+    ports:
+      # Formato: PUERTO_HOST_WINDOWS:PUERTO_INTERNO_CONTENEDOR (Postgres siempre escucha en 5432 dentro de Docker)
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-saluddigna} -d ${POSTGRES_DB:-omnicanal}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - omnicanal_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: sd_omnicanal_redis
+    restart: unless-stopped
+    # AOF habilitado para persistir colas BullMQ y DLQ ante reinicios
+    # maxmemory-policy noeviction es requisito oficial de BullMQ
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD:-redis_dev_pass}
+      --maxmemory-policy noeviction
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_dev_pass}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - omnicanal_net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sd_omnicanal_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Sobreescribe los hostnames para red interna de Docker (postgres:5432 y redis:6379)
+      DATABASE_URL: postgresql://${POSTGRES_USER:-saluddigna}:${POSTGRES_PASSWORD:-saluddigna_dev_pass}@postgres:5432/${POSTGRES_DB:-omnicanal}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_dev_pass}@redis:6379
+      PORT: ${BACKEND_PORT:-3000}
+      HOST: 0.0.0.0
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
+    networks:
+      - omnicanal_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+    container_name: sd_omnicanal_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    networks:
+      - omnicanal_net
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  omnicanal_net:
+    driver: bridge

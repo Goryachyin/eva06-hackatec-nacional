@@ -1,0 +1,19 @@
+# Secretos y entorno
+.env
+.env.local
+.env.*.local
+.env.example
+
+# Node / TypeScript / Builds
+node_modules/
+dist/
+build/
+.vite/
+*.log
+npm-debug.log*
+
+# Prisma / OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

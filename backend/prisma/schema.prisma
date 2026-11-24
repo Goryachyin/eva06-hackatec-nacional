@@ -1,0 +1,210 @@
+// ============================================================================
+// Reto Salud Digna x TecNM HackaTec Nacional
+// Orquestacion Omnicanal de Atencion: Un paciente, una sola conversacion
+//
+// Nucleo Relacional: PostgreSQL 16 + Prisma ORM
+// Nota arquitectonica:
+//   - Los retos Step-Up OTP (TTL 300s) y la idempotencia de webhooks WhatsApp
+//     (wamid con SETNX + TTL 86400s) viven en Redis 7 (no en PostgreSQL) para
+//     mantener baja latencia, expiracion automatica y escalabilidad stateless.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS CANONICOS (100% alineados con Catálogo de Eventos y Diagramas Fase 1)
+// ============================================================================
+
+/// Tipo de identificador agnostico al canal para Identity Stitching
+enum IdentifierType {
+  WEB_SESSION
+  PHONE
+  EMAIL
+  CURP
+  APP
+}
+
+/// Genero del paciente en registro Salud Digna
+enum Gender {
+  MASCULINO
+  FEMENINO
+  OTRO
+  NO_ESPECIFICADO
+}
+
+/// Canales de atencion conectados via Channel Adapters
+enum Channel {
+  WEB
+  WHATSAPP
+  CALL_CENTER
+  APP
+  SYSTEM
+}
+
+/// Conjunto canonico unico de 8 estados de la Maquina de Estados
+enum CaseState {
+  INICIADO
+  COTIZANDO
+  CLINICA_ELEGIDA
+  PAUSADO_PENDIENTE
+  EN_PROGRESO
+  DUDAS_ABIERTAS
+  EN_ATENCION_ASESOR
+  CITA_CONFIRMADA
+}
+
+/// Actor que origina un evento en el Audit Trail
+enum ActorRole {
+  PATIENT
+  BOT
+  ADVISOR
+  ADMIN
+  SYSTEM
+}
+
+/// Catalogo oficial de eventos omnicanal (13 eventos)
+enum EventType {
+  SESSION_STARTED
+  STUDY_QUOTED
+  CLINIC_SELECTED
+  IDENTITY_LINKED
+  FLOW_INTERRUPTED
+  CHANNEL_SWITCH_DETECTED
+  OTP_CHALLENGE_SENT
+  OTP_VALIDATION_FAILED
+  IDENTITY_VERIFIED_OTP
+  CONTEXT_REHYDRATED
+  PATIENT_QUESTION_LOGGED
+  ADVISOR_ASSIGNED
+  APPOINTMENT_CONFIRMED
+}
+
+/// Roles operativos protegidos por RBAC + JWT
+enum StaffRole {
+  ASESOR
+  ADMIN
+}
+
+// ============================================================================
+// MODELOS RELACIONALES (POSTGRESQL 16)
+// ============================================================================
+
+/// Identidad maestra unica del paciente entre todos los canales
+/// Los campos de perfil son opcionales (?) para soportar sesiones anonimas iniciales
+/// y enriquecimiento progresivo (Identity Stitching) sin duplicar registros.
+model Patient {
+  id               String    @id @default(uuid()) @db.Uuid
+  firstName        String?   @map("nombres") @db.VarChar(120)
+  paternalLastName String?   @map("apellido_paterno") @db.VarChar(100)
+  maternalLastName String?   @map("apellido_materno") @db.VarChar(100)
+  birthDate        DateTime? @map("fecha_nacimiento") @db.Date
+  gender           Gender?   @map("genero")
+  birthState       String?   @map("estado_nacimiento") @db.VarChar(80)
+  country          String    @default("México") @map("pais") @db.VarChar(80)
+  curp             String?   @unique @map("curp") @db.VarChar(18)
+  phone            String?   @unique @map("telefono") @db.VarChar(20)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  identityLinks IdentityLink[]
+  serviceCases  ServiceCase[]
+  journeyEvents JourneyEvent[]
+
+  @@index([paternalLastName, maternalLastName, firstName], name: "idx_patients_full_name")
+  @@map("patients")
+}
+
+/// Vinculacion multicanal (Identity Resolution + proteccion PII en monitoreo)
+model IdentityLink {
+  id               String         @id @default(uuid()) @db.Uuid
+  patientId        String         @map("patient_id") @db.Uuid
+  identifierType   IdentifierType @map("identifier_type")
+  /// Hash HMAC/SHA-256 con pepper del servidor para busqueda exacta sin exponer PII
+  identifierHash   String         @map("identifier_hash") @db.VarChar(128)
+  /// Version enmascarada segura para Tablero Admin (ej. ***-***-2790, a***@demo.com)
+  identifierMasked String         @map("identifier_masked") @db.VarChar(120)
+  verified         Boolean        @default(false)
+  verifiedAt       DateTime?      @map("verified_at") @db.Timestamptz(6)
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([identifierType, identifierHash], name: "uq_identity_type_hash")
+  @@index([patientId], name: "idx_identity_links_patient")
+  @@map("identity_links")
+}
+
+/// Tramite vivo del paciente: estado canonico, contexto JSONB y concurrencia optimista
+model ServiceCase {
+  id                String    @id @default(uuid()) @db.Uuid
+  patientId         String    @map("patient_id") @db.Uuid
+  journeyId         String    @unique @default(uuid()) @map("journey_id") @db.Uuid
+  caseType          String    @default("CITA_ESTUDIO") @map("case_type") @db.VarChar(60)
+  currentState      CaseState @default(INICIADO) @map("current_state")
+  currentChannel    Channel   @map("current_channel")
+  /// Datos parciales o completos del tramite (estudio, clinica, horario, dudas, folio, resumen IA)
+  contextJson       Json      @default("{}") @map("context_json") @db.JsonB
+  /// Bloqueo optimista: incrementar en cada transicion verificando WHERE id = ? AND version = ?
+  version           Int       @default(1)
+  assignedAdvisorId String?   @map("assigned_advisor_id") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  patient         Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  assignedAdvisor StaffUser?     @relation("AdvisorAssignedCases", fields: [assignedAdvisorId], references: [id], onDelete: SetNull)
+  journeyEvents   JourneyEvent[]
+
+  @@index([patientId, currentState], name: "idx_cases_patient_state")
+  @@index([currentState, updatedAt], name: "idx_cases_state_updated")
+  @@index([assignedAdvisorId], name: "idx_cases_advisor")
+  @@map("service_cases")
+}
+
+/// Audit Trail cronologico e inmutable (Trazabilidad E2E con correlation_id)
+model JourneyEvent {
+  id            String     @id @default(uuid()) @db.Uuid
+  caseId        String     @map("case_id") @db.Uuid
+  patientId     String     @map("patient_id") @db.Uuid
+  journeyId     String     @map("journey_id") @db.Uuid
+  /// Identificador de traza distribuida (HTTP/Webhook -> BullMQ -> Worker -> Redis Pub/Sub -> SSE)
+  correlationId String     @map("correlation_id") @db.Uuid
+  channel       Channel
+  actorRole     ActorRole  @map("actor_role")
+  eventType     EventType  @map("event_type")
+  prevState     CaseState? @map("prev_state")
+  nextState     CaseState? @map("next_state")
+  payloadJson   Json       @default("{}") @map("payload_json") @db.JsonB
+  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  serviceCase ServiceCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  patient     Patient     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, createdAt], name: "idx_events_case_time")
+  @@index([patientId, createdAt], name: "idx_events_patient_time")
+  @@index([journeyId, createdAt], name: "idx_events_journey_time")
+  @@index([correlationId], name: "idx_events_correlation")
+  @@index([eventType, createdAt], name: "idx_events_type_time")
+  @@map("journey_events")
+}
+
+/// Usuarios operativos del sistema con control de acceso RBAC (Asesor Call Center y Administrador)
+model StaffUser {
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String    @unique @db.VarChar(180)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  role         StaffRole
+  fullName     String    @map("full_name") @db.VarChar(180)
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  assignedCases ServiceCase[] @relation("AdvisorAssignedCases")
+
+  @@map("users_staff")
+}
