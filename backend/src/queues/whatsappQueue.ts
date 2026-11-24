@@ -19,6 +19,7 @@ import {
 } from "../core/identityService";
 import { CaseContextJson, transitionServiceCase } from "../core/stateMachine";
 import { recordAndPublishEvent } from "../core/eventBus";
+import { runSmartWhatsAppAssistant } from "../core/aiAssistant";
 
 export interface WhatsAppInboundJob {
   messageId: string;
@@ -348,6 +349,25 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
       payload: { source: jobData.source },
     });
 
+    // Si OpenAI está habilitado, procesamos incluso el primer turno con Function Calling NLU
+    if (env.OPENAI_API_KEY) {
+      const history = await getSimulatedChatHistory(phone);
+      const aiRes = await runSmartWhatsAppAssistant({
+        serviceCase: activeCase,
+        patientFirstName: holder.firstName,
+        isThirdParty: false,
+        relationshipLabel: "Titular",
+        history,
+        userText: text,
+        correlationId,
+      });
+      if (aiRes) {
+        if (aiRes.confirmed) await redis.del(SELECTED_CASE_KEY(phone));
+        await replyToPatient(jobData, aiRes.reply);
+        return { reply: aiRes.reply };
+      }
+    }
+
     const matchedStudy = STUDIES_CATALOG.find(
       (s) =>
         text.toLowerCase().includes(s.code.toLowerCase()) ||
@@ -504,7 +524,28 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
     return { reply };
   }
 
-  // 4. Canal autenticado: procesar opciones predeterminadas (1..4), estudio, clinica, pagos, asesor, confirmacion o duda
+  // 4. Canal autenticado (después de validar Menú Familiar y Step-Up OTP):
+  //    Si OPENAI_API_KEY está configurada, delegamos comprensión + Function Calling al plugin IA
+  //    con fallback automático e invisible al motor determinístico si hay error o timeout.
+  if (env.OPENAI_API_KEY) {
+    const history = await getSimulatedChatHistory(phone);
+    const aiRes = await runSmartWhatsAppAssistant({
+      serviceCase: activeCase,
+      patientFirstName: activeCase.patient.firstName,
+      isThirdParty,
+      relationshipLabel: activeCase.relationshipLabel || (isThirdParty ? "Familiar" : "Titular"),
+      history,
+      userText: text,
+      correlationId,
+    });
+    if (aiRes) {
+      if (aiRes.confirmed) await redis.del(SELECTED_CASE_KEY(phone));
+      await replyToPatient(jobData, aiRes.reply);
+      return { reply: aiRes.reply };
+    }
+  }
+
+  // Fallback determinístico (si no hay OPENAI_API_KEY o si OpenAI falló/timeout):
   if (/^(hola|buen[oa]s|inicio|ayuda|opciones)\b/i.test(text) && !ctx.study) {
     const reply = BOT_TEMPLATES.welcomeMenu();
     await replyToPatient(jobData, reply);

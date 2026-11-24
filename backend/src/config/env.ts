@@ -22,6 +22,11 @@ const envSchema = z.object({
     .min(16, "WHATSAPP_GATEWAY_SECRET debe tener al menos 16 caracteres")
     .default("sd_e2e_gateway_hmac_secret_2026_local"),
   GATEWAY_SIGNATURE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+
+  // Plugin opcional de IA (OpenAI Function Calling) con fallback deterministico automatico
+  OPENAI_API_KEY: z.string().default(""),
+  OPENAI_MODEL: z.string().default("gpt-4o-mini"),
+  OPENAI_TIMEOUT_MS: z.coerce.number().int().positive().default(6500),
 });
 
 const parsed = envSchema.safeParse(process.env);
