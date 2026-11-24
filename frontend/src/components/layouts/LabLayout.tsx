@@ -1,12 +1,5 @@
 import React, { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import {
-  FlaskConical,
-  KeyRound,
-  MessageCircle,
-  Server,
-  Wrench,
-} from "lucide-react";
 import { AWS_API_URL, getApiBaseUrl, LOCAL_API_URL, setApiBaseUrl } from "../../lib/api";
 
 interface LabLayoutProps {
@@ -26,35 +19,26 @@ export const LabLayout: React.FC<LabLayoutProps> = ({ children }) => {
   };
 
   const nav = [
-    { to: "/lab", label: "Resumen QA", icon: Wrench, exact: true },
-    { to: "/lab/whatsapp", label: "Simulador WhatsApp", icon: MessageCircle, exact: false },
-    { to: "/lab/otp-2fa", label: "Consola 2FA (OTP)", icon: KeyRound, exact: false },
+    { to: "/lab", label: "Resumen QA", exact: true },
+    { to: "/lab/whatsapp", label: "Simulador WhatsApp", exact: false },
+    { to: "/lab/otp-2fa", label: "Consola 2FA (OTP)", exact: false },
   ];
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-100">
-      <header className="bg-slate-900 text-white border-b border-slate-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center justify-center">
-              <FlaskConical className="w-5 h-5" />
-            </div>
-            <div className="leading-tight">
-              <div className="text-sm font-extrabold tracking-tight flex items-center gap-2">
-                Entorno de Pruebas y Simuladores
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-500/20 text-amber-300 border border-amber-400/30">
-                  QA Interno
-                </span>
-              </div>
-              <div className="text-[11px] text-slate-400">
-                Aislado del portal público de pacientes y del Back-Office Admin
-              </div>
-            </div>
+    <div className="min-h-screen flex flex-col bg-[#FFFFFF] text-[#1F2933]">
+      <header className="bg-[#F7F8F9] border-b border-[#E4E7EB]">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+          <div className="leading-tight">
+            <strong className="block text-sm font-bold text-[#00875A]">
+              Entorno de Pruebas y Simuladores · QA Interno
+            </strong>
+            <small className="block text-[11px] text-[#52606D]">
+              Aislado del portal público de pacientes y de administración
+            </small>
           </div>
 
-          <nav className="hidden md:flex items-center gap-1">
+          <nav aria-label="Navegación QA" className="hidden md:flex items-center gap-6 h-16">
             {nav.map((item) => {
-              const Icon = item.icon;
               const active = item.exact
                 ? location.pathname === item.to
                 : location.pathname.startsWith(item.to) ||
@@ -65,47 +49,47 @@ export const LabLayout: React.FC<LabLayoutProps> = ({ children }) => {
                 <Link
                   key={item.to}
                   to={item.to}
-                  className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition ${
+                  className={`h-full inline-flex items-center text-xs border-b-2 transition-colors ${
                     active
-                      ? "bg-white/15 text-white"
-                      : "text-slate-300 hover:bg-white/10 hover:text-white"
+                      ? "border-[#00875A] text-[#00875A] font-semibold"
+                      : "border-transparent text-[#52606D] hover:text-[#1F2933]"
                   }`}
                 >
-                  <Icon className="w-3.5 h-3.5" />
                   {item.label}
                 </Link>
               );
             })}
           </nav>
 
-          {/* Selector de entorno API únicamente disponible dentro del laboratorio de pruebas */}
-          <div className="flex items-center gap-2 shrink-0">
-            <Server className="w-3.5 h-3.5 text-slate-400 hidden sm:block" />
-            <div className="inline-flex rounded-full bg-white/10 p-0.5 border border-white/15">
-              <button
-                type="button"
-                onClick={() => handleSwitchBackend("local")}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition ${
-                  !isAws ? "bg-white text-slate-900" : "text-slate-300 hover:text-white"
-                }`}
-              >
-                Local
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSwitchBackend("aws")}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition ${
-                  isAws ? "bg-emerald-500 text-white" : "text-slate-300 hover:text-white"
-                }`}
-              >
-                AWS Live
-              </button>
-            </div>
+          {/* Selector de entorno API plano con bordes de 1px */}
+          <div className="inline-flex border border-[#E4E7EB] bg-[#FFFFFF] shrink-0">
+            <button
+              type="button"
+              onClick={() => handleSwitchBackend("local")}
+              className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
+                !isAws
+                  ? "bg-[#00875A] text-[#FFFFFF]"
+                  : "text-[#52606D] hover:text-[#1F2933]"
+              }`}
+            >
+              Local
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSwitchBackend("aws")}
+              className={`px-3 py-1.5 text-xs font-semibold border-l border-[#E4E7EB] transition-colors ${
+                isAws
+                  ? "bg-[#00875A] text-[#FFFFFF]"
+                  : "text-[#52606D] hover:text-[#1F2933]"
+              }`}
+            >
+              AWS Live
+            </button>
           </div>
         </div>
       </header>
 
-      <main className="flex-1">{children}</main>
+      <main className="flex-1 bg-[#FFFFFF]">{children}</main>
     </div>
   );
 };

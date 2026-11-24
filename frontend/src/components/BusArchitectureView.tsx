@@ -1,21 +1,4 @@
 import React, { useEffect, useState } from "react";
-import {
-  Activity,
-  ArrowRight,
-  Cpu,
-  Database,
-  Globe,
-  Headphones,
-  KeyRound,
-  Layers,
-  Lock,
-  MessageCircle,
-  Radio,
-  Server,
-  ShieldCheck,
-  Users,
-  Zap,
-} from "lucide-react";
 import { api } from "../lib/api";
 import { CHANNEL_META, EVENT_TYPE_LABELS, formatTimeShort } from "../lib/constants";
 import { AdminOverviewResponse, Channel } from "../types/api";
@@ -34,10 +17,6 @@ interface BusArchitectureViewProps {
   sseConnected: boolean;
 }
 
-/**
- * Representación gráfica interactiva y en tiempo real del Bus de Datos y todos los módulos
- * (solicitada por los jueces): resalta en vivo cada capa cuando cruza un evento por SSE.
- */
 export const BusArchitectureView: React.FC<BusArchitectureViewProps> = ({
   overview,
   latestEvent,
@@ -60,302 +39,238 @@ export const BusArchitectureView: React.FC<BusArchitectureViewProps> = ({
     activeEventType === "OTP_VALIDATION_FAILED";
 
   return (
-    <div className="space-y-6">
-      {/* Banner superior explicativo con pulso en vivo */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div>
-          <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#00843D] bg-[#E6F4EC] px-2.5 py-1 rounded-full mb-2">
-            <Cpu className="w-3.5 h-3.5" />
-            Arquitectura Detallada · Bus de Datos y Módulos en Vivo
-          </div>
-          <h2 className="text-xl font-extrabold text-slate-900">
-            Flujo de Datos por el Bus Omnicanal (Cero Meta · Firma Digital E2E)
+    <div className="space-y-8">
+      {/* Encabezado editorial de arquitectura */}
+      <header className="pb-6 border-b border-[#E4E7EB] flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+        <div className="space-y-1.5">
+          <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
+            Arquitectura de datos · Bus omnicanal
+          </p>
+          <h2 className="text-2xl font-bold text-[#1F2933]">
+            Flujo de eventos y módulos activos en tiempo real
           </h2>
-          <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-            Cada vez que un paciente interactúa en Web, WhatsApp (Baileys firmado HMAC-SHA256) o
-            Call Center, los módulos recorridos se iluminan en tiempo real mediante Redis Pub/Sub.
+          <p className="text-sm text-[#52606D] max-w-3xl">
+            Cada interacción en Web, WhatsApp (Baileys firmado HMAC-SHA256) o Call Center actualiza
+            los módulos recorridos en vivo mediante Redis Pub/Sub.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <span
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border ${
-              gatewayCount > 0
-                ? "bg-emerald-50 text-emerald-800 border-emerald-200"
-                : "bg-slate-50 text-slate-600 border-slate-200"
-            }`}
-          >
-            <MessageCircle className="w-3.5 h-3.5" />
-            Gateways Baileys activos: {gatewayCount}
-          </span>
-          <span
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border ${
-              sseConnected
-                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                : "bg-amber-50 text-amber-700 border-amber-200"
-            }`}
-          >
-            <Radio className={`w-3.5 h-3.5 ${sseConnected ? "animate-pulse" : ""}`} />
-            {sseConnected ? "Telemetría SSE conectada" : "Reconectando"}
-          </span>
-        </div>
-      </div>
+        <dl className="flex flex-wrap gap-6 text-xs shrink-0">
+          <div>
+            <dt className="text-[#52606D]">Gateways Baileys</dt>
+            <dd className="font-semibold text-[#1F2933] mt-0.5">{gatewayCount} activos</dd>
+          </div>
+          <div>
+            <dt className="text-[#52606D]">Telemetría SSE</dt>
+            <dd className={`font-semibold mt-0.5 ${sseConnected ? "text-[#00875A]" : "text-[#52606D]"}`}>
+              {sseConnected ? "Conectada" : "Reconectando"}
+            </dd>
+          </div>
+        </dl>
+      </header>
 
       {/* Último paquete trazado en el bus */}
       {latestEvent && (
-        <div className="p-4 rounded-2xl bg-[#0B1F16] text-white flex flex-wrap items-center justify-between gap-3 shadow-md">
-          <div className="flex items-center gap-2.5 text-xs sm:text-sm">
-            <Zap className="w-4 h-4 text-emerald-400 animate-pulse shrink-0" />
-            <span className="font-bold text-emerald-300">Último evento en el Bus:</span>
-            <span className="px-2 py-0.5 rounded bg-white/15 font-bold">
-              {EVENT_TYPE_LABELS[latestEvent.eventType]?.label || latestEvent.eventType}
-            </span>
-            {latestEvent.channel && (
-              <span className="text-slate-300">
-                vía <strong>{CHANNEL_META[latestEvent.channel]?.label || latestEvent.channel}</strong>
-              </span>
-            )}
-          </div>
-          <div className="text-xs font-mono text-emerald-200/80">
+        <section className="border-l-2 border-[#00875A] pl-4 py-1 flex flex-wrap items-baseline justify-between gap-3 text-sm">
+          <p className="text-[#1F2933]">
+            <strong className="text-[#00875A]">Último evento en el bus:</strong>{" "}
+            {EVENT_TYPE_LABELS[latestEvent.eventType]?.label || latestEvent.eventType}
+            {latestEvent.channel
+              ? ` vía ${CHANNEL_META[latestEvent.channel]?.label || latestEvent.channel}`
+              : ""}
+          </p>
+          <time dateTime={latestEvent.timestamp} className="text-xs font-mono text-[#52606D]">
             {latestEvent.correlationId ? `cid=${latestEvent.correlationId.slice(0, 12)} · ` : ""}
             {formatTimeShort(latestEvent.timestamp)}
-          </div>
-        </div>
+          </time>
+        </section>
       )}
 
-      {/* Diagrama Arquitectónico Interactivo de 3 Capas + Bus Central */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-stretch">
-        {/* COLUMNA 1: CANALES Y ADAPTADORES EXTERNOS */}
-        <div className="xl:col-span-3 bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-3 flex flex-col">
-          <div className="text-xs font-extrabold uppercase tracking-wider text-slate-500 border-b border-slate-100 pb-2">
-            1. Canales de Entrada / Salida
-          </div>
-
-          <ModuleBox
-            title="Portal Público Web"
-            subtitle="React SPA · Cuentas propias, 9 campos Salud Digna + Familiares"
-            badge="HTTPS + JWT Paciente"
-            icon={<Globe className="w-4 h-4 text-[#0066B3]" />}
-            active={activeChannel === "WEB"}
-          />
-
-          <ModuleBox
-            title="Gateway WhatsApp Local"
-            subtitle="Baileys (número propio) · Firma HMAC-SHA256 E2E bidireccional"
-            badge="POST /inbound + SSE /outbound"
-            icon={<MessageCircle className="w-4 h-4 text-emerald-600" />}
-            active={activeChannel === "WHATSAPP"}
-          />
-
-          <ModuleBox
-            title="Estación Call Center"
-            subtitle="Consola Asesor aislada · Screen-Pop SSE + Folio/QR en 1 clic"
-            badge="JWT RBAC (ASESOR)"
-            icon={<Headphones className="w-4 h-4 text-violet-600" />}
-            active={activeChannel === "CALL_CENTER"}
-          />
-
-          <ModuleBox
-            title="Consola 2FA (Out-of-Band)"
-            subtitle="Verificación Step-Up OTP 6 dígitos (cambios de canal y terceros)"
-            badge="TTL 5m · Máx. 3 intentos"
-            icon={<KeyRound className="w-4 h-4 text-amber-600" />}
-            active={isOtpPulse}
-          />
-        </div>
-
-        {/* COLUMNA 2: CEREBRO ORQUESTADOR (AWS ECS FARGATE STATELESS) */}
-        <div className="xl:col-span-5 bg-gradient-to-b from-white to-emerald-50/40 rounded-2xl border-2 border-[#00843D]/30 p-5 shadow-sm space-y-4 flex flex-col">
-          <div className="flex items-center justify-between border-b border-emerald-100 pb-2.5">
-            <div className="text-xs font-extrabold uppercase tracking-wider text-[#005A2B] flex items-center gap-1.5">
-              <Server className="w-4 h-4 text-[#00843D]" />
-              2. Cerebro Orquestador Stateless (AWS ECS Fargate)
-            </div>
-            <span className="text-[10px] font-mono bg-[#E6F4EC] text-[#005A2B] px-2 py-0.5 rounded font-bold">
-              Node 20 · Fastify v5
-            </span>
-          </div>
-
-          {/* Perímetro de Seguridad */}
-          <div className="p-3.5 rounded-xl bg-slate-900 text-white space-y-1.5">
-            <div className="text-xs font-bold flex items-center gap-1.5 text-emerald-300">
-              <Lock className="w-3.5 h-3.5" />
-              Perímetro Criptográfico y Control de Acceso
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-300">
-              <div>• Firma E2E HMAC-SHA256 (`timingSafeEqual`)</div>
-              <div>• Anti-replay `X-Gateway-Timestamp` (±300s)</div>
-              <div>• JWT separado (`PATIENT` vs `STAFF`)</div>
-              <div>• PII Masking automático en observabilidad</div>
-            </div>
-          </div>
-
-          {/* 4 Módulos internos del Orquestador */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 flex-1">
-            <ModuleBox
-              title="Identity Resolution Multibeneficiario"
-              subtitle="Separa Titular (teléfono/cuenta) de Beneficiario (expediente clínico por CURP)"
-              badge="patient_relationships"
-              icon={<Users className="w-4 h-4 text-[#0066B3]" />}
-              active={activeEventType === "IDENTITY_LINKED" || isOtpPulse}
+      {/* Diagrama de 3 columnas separadas por líneas verticales de 1px */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
+        {/* Columna 1: Canales */}
+        <section className="xl:col-span-3 space-y-4">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-[#00875A] pb-2 border-b border-[#E4E7EB]">
+            1. Canales de entrada y salida
+          </h3>
+          <ul className="divide-y divide-[#E4E7EB]">
+            <ModuleRow
+              title="Portal público web"
+              subtitle="React SPA · Cuentas propias, 9 campos Salud Digna y familiares"
+              meta="HTTPS + JWT Paciente"
+              active={activeChannel === "WEB"}
             />
-
-            <ModuleBox
-              title="Máquina de Estados (8 Estados)"
-              subtitle="100% determinística (sin Bot-Bot) · N-saltos bidireccionales + Lock Optimista"
-              badge="service_cases.version"
-              icon={<Layers className="w-4 h-4 text-[#00843D]" />}
-              active={Boolean(latestEvent)}
-            />
-
-            <ModuleBox
-              title="Worker BullMQ WhatsApp"
-              subtitle="Menú multibeneficiario numerado, cotización, dudas y firma de respuestas salientes"
-              badge={`Completados: ${overview?.queues.whatsappInbound.completed ?? 0}`}
-              icon={<Activity className="w-4 h-4 text-emerald-700" />}
+            <ModuleRow
+              title="Gateway WhatsApp local"
+              subtitle="Baileys (número propio) · Firma HMAC-SHA256 E2E bidireccional"
+              meta="POST /inbound + SSE /outbound"
               active={activeChannel === "WHATSAPP"}
             />
+            <ModuleRow
+              title="Estación Call Center"
+              subtitle="Consola asesor aislada · Screen-Pop SSE y folio/QR en un clic"
+              meta="JWT RBAC (ASESOR)"
+              active={activeChannel === "CALL_CENTER"}
+            />
+            <ModuleRow
+              title="Consola 2FA (Out-of-Band)"
+              subtitle="Verificación Step-Up OTP 6 dígitos para cambios de canal y terceros"
+              meta="TTL 5m · Máx. 3 intentos"
+              active={isOtpPulse}
+            />
+          </ul>
+        </section>
 
-            <ModuleBox
-              title="Event Bus & Auditoría"
-              subtitle="Persiste journey_events inmutable y difunde por Redis Pub/Sub con correlation_id"
-              badge={`Eventos: ${overview?.kpis.totalEventsRecorded ?? 0}`}
-              icon={<ShieldCheck className="w-4 h-4 text-indigo-600" />}
+        {/* Columna 2: Orquestador */}
+        <section className="xl:col-span-5 xl:border-l xl:border-[#E4E7EB] xl:pl-8 space-y-6">
+          <div className="flex items-baseline justify-between gap-2 pb-2 border-b border-[#E4E7EB]">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-[#00875A]">
+              2. Orquestador stateless (AWS ECS Fargate)
+            </h3>
+            <code className="text-[11px] font-mono text-[#52606D]">Node 20 · Fastify v5</code>
+          </div>
+
+          <div className="pb-4 border-b border-[#E4E7EB] space-y-2">
+            <h4 className="text-xs font-bold text-[#1F2933]">
+              Perímetro criptográfico y control de acceso
+            </h4>
+            <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-[#52606D] list-disc pl-4">
+              <li>Firma E2E HMAC-SHA256 (<code>timingSafeEqual</code>)</li>
+              <li>Anti-replay <code>X-Gateway-Timestamp</code> (±300s)</li>
+              <li>JWT separado (<code>PATIENT</code> vs <code>STAFF</code>)</li>
+              <li>Enmascarado PII automático en observabilidad</li>
+            </ul>
+          </div>
+
+          <ul className="divide-y divide-[#E4E7EB]">
+            <ModuleRow
+              title="Identity Resolution multibeneficiario"
+              subtitle="Separa titular (teléfono/cuenta) de beneficiario (expediente clínico por CURP)"
+              meta="patient_relationships"
+              active={activeEventType === "IDENTITY_LINKED" || isOtpPulse}
+            />
+            <ModuleRow
+              title="Máquina de estados (8 estados)"
+              subtitle="Determinística · N-saltos bidireccionales y lock optimista"
+              meta="service_cases.version"
               active={Boolean(latestEvent)}
             />
-          </div>
+            <ModuleRow
+              title="Worker BullMQ WhatsApp"
+              subtitle="Menú multibeneficiario numerado, cotización, dudas y firma saliente"
+              meta={`Completados: ${overview?.queues.whatsappInbound.completed ?? 0}`}
+              active={activeChannel === "WHATSAPP"}
+            />
+            <ModuleRow
+              title="Event Bus y auditoría"
+              subtitle="Persiste journey_events inmutable y difunde por Redis Pub/Sub"
+              meta={`Eventos: ${overview?.kpis.totalEventsRecorded ?? 0}`}
+              active={Boolean(latestEvent)}
+            />
+          </ul>
 
-          {/* Flecha visual del flujo de datos */}
-          <div className="rounded-xl bg-white border border-emerald-200 px-3.5 py-2.5 flex flex-wrap items-center justify-center gap-2 text-[11px] font-bold text-slate-700">
-            <span>Ingesta Firmada</span>
-            <ArrowRight className="w-3.5 h-3.5 text-[#00843D]" />
-            <span>Redis SETNX</span>
-            <ArrowRight className="w-3.5 h-3.5 text-[#00843D]" />
-            <span>BullMQ Worker</span>
-            <ArrowRight className="w-3.5 h-3.5 text-[#00843D]" />
-            <span>PostgreSQL + JSONB</span>
-            <ArrowRight className="w-3.5 h-3.5 text-[#00843D]" />
-            <span>Pub/Sub → SSE Vivo</span>
-          </div>
-        </div>
+          <p className="pt-4 border-t border-[#E4E7EB] text-xs font-medium text-[#1F2933]">
+            Ingesta firmada → Redis SETNX → BullMQ Worker → PostgreSQL + JSONB → Pub/Sub → SSE vivo
+          </p>
+        </section>
 
-        {/* COLUMNA 3: BUS DE EVENTOS (REDIS) Y PERSISTENCIA (POSTGRESQL) */}
-        <div className="xl:col-span-4 bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-4 flex flex-col">
-          <div className="text-xs font-extrabold uppercase tracking-wider text-slate-500 border-b border-slate-100 pb-2">
-            3. Bus Distribuido (Redis) y Persistencia (PostgreSQL)
-          </div>
-
-          {/* Bus Redis */}
-          <div className="p-4 rounded-xl bg-rose-50/60 border border-rose-200/80 space-y-2.5">
-            <div className="flex items-center justify-between">
-              <div className="text-xs font-extrabold text-rose-800 flex items-center gap-1.5">
-                <Zap className="w-4 h-4 text-rose-600" />
-                Bus Efímero · Redis 7 / AWS Valkey
-              </div>
-              <span className="text-[10px] font-mono bg-white px-1.5 py-0.5 rounded border border-rose-200 text-rose-700">
-                prefix: {"{bull}"}
-              </span>
+        {/* Columna 3: Redis y PostgreSQL */}
+        <section className="xl:col-span-4 xl:border-l xl:border-[#E4E7EB] xl:pl-8 space-y-6">
+          <div className="space-y-3">
+            <div className="flex items-baseline justify-between gap-2 pb-2 border-b border-[#E4E7EB]">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-[#00875A]">
+                3. Bus Redis 7 / AWS Valkey
+              </h3>
+              <code className="text-[11px] font-mono text-[#52606D]">prefix: {"{bull}"}</code>
             </div>
 
-            <div className="grid grid-cols-1 gap-2 text-xs">
-              <BusChannelPill
+            <ul className="divide-y divide-[#E4E7EB]">
+              <BusChannelRow
                 name="SETNX wamid:<id>"
                 desc="Idempotencia 24h anti-duplicados"
                 metric="0 duplicados"
               />
-              <BusChannelPill
+              <BusChannelRow
                 name="BullMQ: whatsapp-inbound + DLQ"
-                desc="3 reintentos exponenciales + cola de fallos"
+                desc="3 reintentos exponenciales y cola de fallos"
                 metric={`DLQ: ${overview?.queues.whatsappDlq.waiting ?? 0}`}
               />
-              <BusChannelPill
+              <BusChannelRow
                 name="Pub/Sub: journey:events"
-                desc="Alimenta Admin SSE + Tracking Paciente en vivo"
+                desc="Alimenta Admin SSE y rastreo de paciente"
                 metric={`SSE: ${overview?.kpis.activeSseSubscribers ?? 0}`}
               />
-              <BusChannelPill
+              <BusChannelRow
                 name="Pub/Sub: whatsapp:outbound"
                 desc="Envía respuestas firmadas HMAC al Gateway Baileys"
                 metric={`GW: ${gatewayCount}`}
               />
-              <BusChannelPill
+              <BusChannelRow
                 name="TTL: otp:challenge + wa:active_case"
                 desc="Retos OTP 5m y selección activa de familiar (30m)"
                 metric="Auto-expira"
               />
-            </div>
+            </ul>
           </div>
 
-          {/* PostgreSQL 16 RDS */}
-          <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-200/80 space-y-2.5 flex-1">
-            <div className="flex items-center justify-between">
-              <div className="text-xs font-extrabold text-[#005291] flex items-center gap-1.5">
-                <Database className="w-4 h-4 text-[#0066B3]" />
-                Persistencia Transaccional · PostgreSQL 16 RDS
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-[11px]">
-              <DbTableTag name="patients" desc="9 campos + CURP única + cuenta" />
-              <DbTableTag name="patient_relationships" desc="Titular → Familiar + consentimiento" />
-              <DbTableTag name="identity_links" desc="Hashes HMAC + PII enmascarada" />
-              <DbTableTag name="service_cases" desc="Beneficiario + Titular + JSONB + version" />
-              <DbTableTag name="journey_events" desc="Audit trail inmutable (13 eventos)" />
-              <DbTableTag name="users_staff" desc="Roles RBAC (ADMIN / ASESOR)" />
-            </div>
+          <div className="space-y-3 pt-2">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-[#00875A] pb-2 border-b border-[#E4E7EB]">
+              Persistencia PostgreSQL 16 RDS
+            </h3>
+            <dl className="divide-y divide-[#E4E7EB] text-xs">
+              <DbTableRow name="patients" desc="9 campos + CURP única + cuenta" />
+              <DbTableRow name="patient_relationships" desc="Titular → Familiar + consentimiento" />
+              <DbTableRow name="identity_links" desc="Hashes HMAC + PII enmascarada" />
+              <DbTableRow name="service_cases" desc="Beneficiario + Titular + JSONB + version" />
+              <DbTableRow name="journey_events" desc="Audit trail inmutable (13 eventos)" />
+              <DbTableRow name="users_staff" desc="Roles RBAC (ADMIN / ASESOR)" />
+            </dl>
           </div>
-        </div>
+        </section>
       </div>
     </div>
   );
 };
 
-const ModuleBox: React.FC<{
+const ModuleRow: React.FC<{
   title: string;
   subtitle: string;
-  badge: string;
-  icon: React.ReactNode;
+  meta: string;
   active?: boolean;
-}> = ({ title, subtitle, badge, icon, active }) => (
-  <div
-    className={`p-3.5 rounded-xl border transition-all ${
-      active
-        ? "bg-[#E6F4EC] border-[#00843D] ring-2 ring-[#00843D]/25 shadow-sm"
-        : "bg-white border-slate-200/90 hover:border-slate-300"
+}> = ({ title, subtitle, meta, active }) => (
+  <li
+    className={`py-3.5 pl-3 border-l-2 ${
+      active ? "border-[#00875A]" : "border-transparent"
     }`}
   >
-    <div className="flex items-start justify-between gap-2">
-      <div className="flex items-center gap-2">
-        <div className="p-1.5 rounded-lg bg-slate-50 border border-slate-100 shrink-0">{icon}</div>
-        <div className="text-xs font-extrabold text-slate-900 leading-tight">{title}</div>
-      </div>
-      {active && <span className="w-2 h-2 rounded-full bg-[#00843D] animate-ping shrink-0 mt-1" />}
+    <div className="flex items-baseline justify-between gap-2">
+      <h4 className={`text-sm font-semibold ${active ? "text-[#00875A]" : "text-[#1F2933]"}`}>
+        {title}
+      </h4>
+      {active && <small className="text-[11px] font-semibold text-[#00875A]">Activo</small>}
     </div>
-    <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">{subtitle}</p>
-    <div className="mt-2 inline-block px-2 py-0.5 rounded bg-slate-100 text-[10px] font-mono font-semibold text-slate-700">
-      {badge}
-    </div>
-  </div>
+    <p className="text-xs text-[#52606D] mt-1 leading-relaxed">{subtitle}</p>
+    <code className="inline-block mt-1.5 text-[11px] font-mono text-[#52606D]">{meta}</code>
+  </li>
 );
 
-const BusChannelPill: React.FC<{ name: string; desc: string; metric: string }> = ({
+const BusChannelRow: React.FC<{ name: string; desc: string; metric: string }> = ({
   name,
   desc,
   metric,
 }) => (
-  <div className="bg-white rounded-lg px-3 py-2 border border-rose-200/70 flex items-center justify-between gap-2">
+  <li className="py-2.5 flex items-baseline justify-between gap-3">
     <div className="min-w-0">
-      <div className="text-[11px] font-bold font-mono text-slate-800 truncate">{name}</div>
-      <div className="text-[10px] text-slate-500 truncate">{desc}</div>
+      <code className="block text-xs font-mono font-semibold text-[#1F2933] truncate">{name}</code>
+      <p className="text-xs text-[#52606D] truncate">{desc}</p>
     </div>
-    <span className="shrink-0 px-2 py-0.5 rounded bg-rose-50 text-rose-700 text-[10px] font-bold">
-      {metric}
-    </span>
-  </div>
+    <strong className="shrink-0 text-xs font-semibold text-[#00875A]">{metric}</strong>
+  </li>
 );
 
-const DbTableTag: React.FC<{ name: string; desc: string }> = ({ name, desc }) => (
-  <div className="bg-white rounded-lg p-2.5 border border-blue-200/70">
-    <div className="font-mono font-bold text-[#005291]">{name}</div>
-    <div className="text-[10px] text-slate-500 mt-0.5 leading-snug">{desc}</div>
+const DbTableRow: React.FC<{ name: string; desc: string }> = ({ name, desc }) => (
+  <div className="py-2 flex items-baseline justify-between gap-3">
+    <dt className="font-mono font-semibold text-[#1F2933]">{name}</dt>
+    <dd className="text-[#52606D] text-right">{desc}</dd>
   </div>
 );

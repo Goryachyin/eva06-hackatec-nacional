@@ -4,14 +4,17 @@ export default {
   theme: {
     extend: {
       colors: {
-        sd: {
-          green: "#00843D",
-          "green-dark": "#005A2B",
-          "green-hover": "#006E32",
-          "green-light": "#E6F4EC",
-          blue: "#0066B3",
-          "blue-light": "#EBF4FC",
-          slate: "#1E293B",
+        clinical: {
+          bg: "#FFFFFF",
+          surface: "#F7F8F9",
+          emerald: "#00875A",
+          "emerald-dark": "#006B47",
+          action: "#E86A17",
+          "action-dark": "#CF5B0E",
+          ink: "#1F2933",
+          muted: "#52606D",
+          line: "#E4E7EB",
+          danger: "#B42318",
         },
       },
       fontFamily: {

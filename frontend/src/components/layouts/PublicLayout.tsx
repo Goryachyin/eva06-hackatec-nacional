@@ -1,16 +1,5 @@
 import React, { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import {
-  CalendarCheck,
-  FlaskConical,
-  Home,
-  LogIn,
-  LogOut,
-  Phone,
-  ShieldCheck,
-  User,
-  UserPlus,
-} from "lucide-react";
 import { clearPatientSession, getPatientToken, getStoredPatient } from "../../lib/api";
 import { PatientProfile } from "../../types/api";
 
@@ -47,194 +36,184 @@ export const PublicLayout: React.FC<PublicLayoutProps> = ({ children }) => {
     path === "/" ? location.pathname === "/" : location.pathname.startsWith(path);
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#F5F7FA]">
-      {/* Barra superior institucional limpia estilo salud-digna.org */}
-      <div className="bg-[#005A2B] text-white text-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-9 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 truncate">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
-            <span className="font-medium truncate">
-              Salud Digna · Prevención y diagnóstico oportuno al alcance de todos
-            </span>
-          </div>
-          <div className="hidden sm:flex items-center gap-4 text-emerald-100 shrink-0">
-            <span className="inline-flex items-center gap-1.5">
-              <Phone className="w-3 h-3" />
-              Atención: 55 3956 6729
-            </span>
-            <span>10% de descuento pagando en línea</span>
-          </div>
+    <div className="min-h-screen flex flex-col bg-[#FFFFFF] text-[#1F2933]">
+      {/* Franja superior estructural (superficie secundaria #F7F8F9) */}
+      <aside className="bg-[#F7F8F9] border-b border-[#E4E7EB] text-xs text-[#52606D]">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-9 flex items-center justify-between gap-4">
+          <p className="truncate font-medium">
+            Salud Digna · Prevención y diagnóstico oportuno
+          </p>
+          <p className="hidden sm:block shrink-0">
+            Atención telefónica: <strong className="text-[#1F2933] font-semibold">55 3956 6729</strong>{" "}
+            · 10% de descuento pagando en línea
+          </p>
         </div>
-      </div>
+      </aside>
 
-      {/* Header público limpio (cero enlaces a Admin, Call Center o Simuladores) */}
-      <header className="sticky top-0 z-40 bg-white border-b border-slate-200/90 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16 gap-4">
-            {/* Marca Salud Digna */}
-            <Link to="/" className="flex items-center gap-3 shrink-0 group">
-              <div className="w-10 h-10 rounded-xl bg-[#00843D] flex items-center justify-center shadow-sm group-hover:bg-[#006E32] transition">
-                <svg
-                  viewBox="0 0 24 24"
-                  className="w-6 h-6 text-white"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M12 5v14M5 12h14" />
-                </svg>
-              </div>
+      {/* Encabezado principal plano con divisor de 1px */}
+      <header className="sticky top-0 z-40 bg-[#FFFFFF] border-b border-[#E4E7EB]">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16 gap-6">
+            {/* Marca Salud Digna en verde esmeralda #00875A */}
+            <Link to="/" className="flex items-center gap-3 shrink-0">
+              <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+                className="w-6 h-6 text-[#00875A] shrink-0"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="square"
+              >
+                <path d="M12 4v16M4 12h16" />
+              </svg>
               <div className="leading-tight">
-                <div className="text-lg font-extrabold tracking-tight text-[#00843D]">
+                <strong className="block text-base font-bold tracking-tight text-[#00875A]">
                   Salud Digna
-                </div>
-                <div className="text-[11px] font-medium text-slate-500">
-                  La salud es para todos
-                </div>
+                </strong>
+                <small className="block text-[11px] font-normal text-[#52606D]">
+                  Diagnóstico clínico
+                </small>
               </div>
             </Link>
 
-            {/* Navegación del Paciente */}
-            <nav className="hidden md:flex items-center gap-1">
+            {/* Navegación principal con indicador inferior en #00875A */}
+            <nav aria-label="Navegación principal" className="hidden md:flex items-center gap-6 h-16">
               <Link
                 to="/"
-                className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition ${
+                className={`h-full inline-flex items-center text-sm border-b-2 transition-colors ${
                   isActive("/")
-                    ? "bg-[#E6F4EC] text-[#005A2B] font-semibold"
-                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                    ? "border-[#00875A] text-[#00875A] font-semibold"
+                    : "border-transparent text-[#52606D] hover:text-[#1F2933]"
                 }`}
               >
-                <Home className="w-4 h-4" />
                 Inicio
               </Link>
               <Link
                 to="/laboratorio"
-                className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition ${
+                className={`h-full inline-flex items-center text-sm border-b-2 transition-colors ${
                   isActive("/laboratorio") || isActive("/web")
-                    ? "bg-[#E6F4EC] text-[#005A2B] font-semibold"
-                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                    ? "border-[#00875A] text-[#00875A] font-semibold"
+                    : "border-transparent text-[#52606D] hover:text-[#1F2933]"
                 }`}
               >
-                <FlaskConical className="w-4 h-4" />
-                Estudios y Citas
+                Estudios y citas
               </Link>
               {patient && (
                 <Link
                   to="/mi-cuenta"
-                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition ${
+                  className={`h-full inline-flex items-center text-sm border-b-2 transition-colors ${
                     isActive("/mi-cuenta")
-                      ? "bg-[#E6F4EC] text-[#005A2B] font-semibold"
-                      : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                      ? "border-[#00875A] text-[#00875A] font-semibold"
+                      : "border-transparent text-[#52606D] hover:text-[#1F2933]"
                   }`}
                 >
-                  <CalendarCheck className="w-4 h-4" />
-                  Mis Citas
+                  Mis citas
                 </Link>
               )}
             </nav>
 
-            {/* Acciones de Cuenta del Paciente */}
-            <div className="flex items-center gap-2 shrink-0">
+            {/* Acciones de cuenta discretas (sin naranja ni cajas flotantes) */}
+            <div className="flex items-center gap-4 shrink-0">
               {patient ? (
                 <>
                   <Link
                     to="/mi-cuenta"
-                    className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-[#E6F4EC] hover:bg-[#d8efe2] text-[#005A2B] text-sm font-semibold transition"
+                    className="text-sm font-semibold text-[#00875A] hover:underline max-w-[160px] truncate"
                   >
-                    <User className="w-4 h-4" />
-                    <span className="max-w-[140px] truncate">
-                      {patient.nombres || "Mi Cuenta"}
-                    </span>
+                    {patient.nombres || "Mi cuenta"}
                   </Link>
                   <button
                     type="button"
                     onClick={handleLogout}
-                    title="Cerrar sesión"
-                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 text-slate-600 text-sm font-medium transition"
+                    className="px-3 py-1.5 border border-[#E4E7EB] text-sm font-medium text-[#52606D] hover:border-[#1F2933] hover:text-[#1F2933] transition-colors"
                   >
-                    <LogOut className="w-4 h-4" />
-                    <span className="hidden sm:inline">Salir</span>
+                    Salir
                   </button>
                 </>
               ) : (
                 <>
                   <Link
                     to="/login"
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-semibold transition"
+                    className="text-sm font-medium text-[#1F2933] hover:text-[#00875A] transition-colors"
                   >
-                    <LogIn className="w-4 h-4" />
                     Iniciar sesión
                   </Link>
                   <Link
                     to="/registro"
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#00843D] hover:bg-[#006E32] text-white text-sm font-semibold shadow-sm transition"
+                    className="px-3.5 py-2 border border-[#00875A] text-sm font-semibold text-[#00875A] hover:bg-[#00875A] hover:text-[#FFFFFF] transition-colors"
                   >
-                    <UserPlus className="w-4 h-4" />
-                    <span className="hidden sm:inline">Crear cuenta</span>
+                    Crear cuenta
                   </Link>
                 </>
               )}
             </div>
           </div>
 
-          {/* Navegación móvil */}
-          <div className="flex md:hidden items-center gap-2 pb-2.5 overflow-x-auto">
+          {/* Navegación móvil plana */}
+          <nav
+            aria-label="Navegación móvil"
+            className="flex md:hidden items-center gap-5 border-t border-[#E4E7EB] overflow-x-auto"
+          >
             <Link
               to="/"
-              className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold ${
-                isActive("/") ? "bg-[#00843D] text-white" : "bg-slate-100 text-slate-700"
+              className={`shrink-0 py-2.5 text-xs border-b-2 ${
+                isActive("/")
+                  ? "border-[#00875A] text-[#00875A] font-semibold"
+                  : "border-transparent text-[#52606D]"
               }`}
             >
               Inicio
             </Link>
             <Link
               to="/laboratorio"
-              className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold ${
-                isActive("/laboratorio")
-                  ? "bg-[#00843D] text-white"
-                  : "bg-slate-100 text-slate-700"
+              className={`shrink-0 py-2.5 text-xs border-b-2 ${
+                isActive("/laboratorio") || isActive("/web")
+                  ? "border-[#00875A] text-[#00875A] font-semibold"
+                  : "border-transparent text-[#52606D]"
               }`}
             >
-              Estudios y Citas
+              Estudios y citas
             </Link>
             {patient && (
               <Link
                 to="/mi-cuenta"
-                className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold ${
+                className={`shrink-0 py-2.5 text-xs border-b-2 ${
                   isActive("/mi-cuenta")
-                    ? "bg-[#00843D] text-white"
-                    : "bg-slate-100 text-slate-700"
+                    ? "border-[#00875A] text-[#00875A] font-semibold"
+                    : "border-transparent text-[#52606D]"
                 }`}
               >
-                Mis Citas
+                Mis citas
               </Link>
             )}
-          </div>
+          </nav>
         </div>
       </header>
 
-      <main className="flex-1">{children}</main>
+      <main className="flex-1 bg-[#FFFFFF]">{children}</main>
 
-      {/* Footer público limpio */}
-      <footer className="bg-white border-t border-slate-200 mt-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-[#00843D]" />
-            <span>© {new Date().getFullYear()} Salud Digna A.C. · Atención Omnicanal al Paciente</span>
-          </div>
-          <div className="flex items-center gap-5">
-            <Link to="/laboratorio" className="hover:text-[#00843D] font-medium">
-              Estudios y Citas
-            </Link>
-            <Link to="/mi-cuenta" className="hover:text-[#00843D] font-medium">
-              Mi Cuenta
-            </Link>
-            <Link to="/privacy" className="hover:text-[#00843D] font-medium">
-              Aviso de Privacidad
-            </Link>
-          </div>
+      {/* Pie de página estructural en #F7F8F9 */}
+      <footer className="bg-[#F7F8F9] border-t border-[#E4E7EB] mt-16">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-xs text-[#52606D]">
+          <p>© {new Date().getFullYear()} Salud Digna A.C. · Atención omnicanal al paciente</p>
+          <ul className="flex flex-wrap items-center gap-6">
+            <li>
+              <Link to="/laboratorio" className="hover:text-[#00875A] font-medium">
+                Estudios y citas
+              </Link>
+            </li>
+            <li>
+              <Link to="/mi-cuenta" className="hover:text-[#00875A] font-medium">
+                Mi cuenta
+              </Link>
+            </li>
+            <li>
+              <Link to="/privacy" className="hover:text-[#00875A] font-medium">
+                Aviso de privacidad
+              </Link>
+            </li>
+          </ul>
         </div>
       </footer>
     </div>

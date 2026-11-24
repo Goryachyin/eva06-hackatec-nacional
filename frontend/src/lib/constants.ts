@@ -16,66 +16,57 @@ export const STATE_META: Record<
   {
     label: string;
     shortLabel: string;
-    badgeClass: string;
+    textClass: string;
     barColor: string;
-    dotColor: string;
   }
 > = {
   INICIADO: {
     label: "Iniciado",
     shortLabel: "Iniciado",
-    badgeClass: "bg-slate-100 text-slate-700 border-slate-200",
-    barColor: "#64748B",
-    dotColor: "bg-slate-500",
+    textClass: "text-[#52606D]",
+    barColor: "#7B8794",
   },
   COTIZANDO: {
     label: "Cotizando",
     shortLabel: "Cotizando",
-    badgeClass: "bg-sky-50 text-sky-700 border-sky-200",
-    barColor: "#0284C7",
-    dotColor: "bg-sky-500",
+    textClass: "text-[#1F2933]",
+    barColor: "#52606D",
   },
   CLINICA_ELEGIDA: {
     label: "Clínica elegida",
     shortLabel: "Clínica",
-    badgeClass: "bg-indigo-50 text-indigo-700 border-indigo-200",
-    barColor: "#4F46E5",
-    dotColor: "bg-indigo-500",
+    textClass: "text-[#00875A]",
+    barColor: "#00875A",
   },
   PAUSADO_PENDIENTE: {
     label: "Pausado / Pendiente",
     shortLabel: "Pausado",
-    badgeClass: "bg-amber-50 text-amber-800 border-amber-200",
-    barColor: "#D97706",
-    dotColor: "bg-amber-500",
+    textClass: "text-[#52606D]",
+    barColor: "#52606D",
   },
   EN_PROGRESO: {
     label: "En progreso",
     shortLabel: "En progreso",
-    badgeClass: "bg-cyan-50 text-cyan-800 border-cyan-200",
-    barColor: "#0891B2",
-    dotColor: "bg-cyan-500",
+    textClass: "text-[#00875A]",
+    barColor: "#00875A",
   },
   DUDAS_ABIERTAS: {
     label: "Dudas abiertas",
     shortLabel: "Dudas",
-    badgeClass: "bg-orange-50 text-orange-800 border-orange-200",
-    barColor: "#EA580C",
-    dotColor: "bg-orange-500",
+    textClass: "text-[#1F2933]",
+    barColor: "#3E4C59",
   },
   EN_ATENCION_ASESOR: {
     label: "En atención asesor",
     shortLabel: "Asesor",
-    badgeClass: "bg-violet-50 text-violet-800 border-violet-200",
-    barColor: "#7C3AED",
-    dotColor: "bg-violet-500",
+    textClass: "text-[#1F2933]",
+    barColor: "#3E4C59",
   },
   CITA_CONFIRMADA: {
     label: "Cita confirmada",
     shortLabel: "Confirmada",
-    badgeClass: "bg-emerald-50 text-emerald-800 border-emerald-200",
-    barColor: "#00843D",
-    dotColor: "bg-[#00843D]",
+    textClass: "text-[#00875A]",
+    barColor: "#00875A",
   },
 };
 
@@ -84,50 +75,50 @@ export const CHANNEL_META: Record<
   {
     label: string;
     color: string;
-    badgeClass: string;
+    textClass: string;
   }
 > = {
   WEB: {
     label: "Sitio Web",
-    color: "#0066B3",
-    badgeClass: "bg-blue-50 text-[#0066B3] border-blue-200",
+    color: "#1F2933",
+    textClass: "text-[#1F2933]",
   },
   WHATSAPP: {
     label: "WhatsApp",
-    color: "#16A34A",
-    badgeClass: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    color: "#00875A",
+    textClass: "text-[#00875A]",
   },
   CALL_CENTER: {
     label: "Call Center",
-    color: "#7C3AED",
-    badgeClass: "bg-violet-50 text-violet-700 border-violet-200",
+    color: "#52606D",
+    textClass: "text-[#52606D]",
   },
   APP: {
     label: "App Móvil",
-    color: "#0EA5E9",
-    badgeClass: "bg-sky-50 text-sky-700 border-sky-200",
+    color: "#7B8794",
+    textClass: "text-[#52606D]",
   },
   SYSTEM: {
     label: "Sistema",
-    color: "#64748B",
-    badgeClass: "bg-slate-100 text-slate-700 border-slate-200",
+    color: "#9AA5B1",
+    textClass: "text-[#52606D]",
   },
 };
 
 export const EVENT_TYPE_LABELS: Record<string, { label: string; tone: string }> = {
-  SESSION_STARTED: { label: "Sesión iniciada", tone: "text-slate-700 bg-slate-100" },
-  IDENTITY_LINKED: { label: "Identidad vinculada", tone: "text-blue-700 bg-blue-50" },
-  STUDY_QUOTED: { label: "Estudio cotizado", tone: "text-sky-700 bg-sky-50" },
-  CLINIC_SELECTED: { label: "Clínica seleccionada", tone: "text-indigo-700 bg-indigo-50" },
-  FLOW_INTERRUPTED: { label: "Abandono / Pausa", tone: "text-amber-800 bg-amber-50" },
-  CHANNEL_SWITCH_DETECTED: { label: "Salto de canal detectado", tone: "text-cyan-800 bg-cyan-50" },
-  OTP_CHALLENGE_SENT: { label: "OTP Step-Up enviado", tone: "text-purple-700 bg-purple-50" },
-  OTP_VALIDATION_FAILED: { label: "OTP fallido (Auditado)", tone: "text-rose-700 bg-rose-50" },
-  IDENTITY_VERIFIED_OTP: { label: "OTP verificado", tone: "text-emerald-700 bg-emerald-50" },
-  CONTEXT_REHYDRATED: { label: "Contexto rehidratado", tone: "text-teal-800 bg-teal-50" },
-  PATIENT_QUESTION_LOGGED: { label: "Duda registrada", tone: "text-orange-800 bg-orange-50" },
-  ADVISOR_ASSIGNED: { label: "Asesor asignado (Screen-Pop)", tone: "text-violet-800 bg-violet-50" },
-  APPOINTMENT_CONFIRMED: { label: "Cita confirmada", tone: "text-emerald-800 bg-emerald-100" },
+  SESSION_STARTED: { label: "Sesión iniciada", tone: "text-[#52606D]" },
+  IDENTITY_LINKED: { label: "Identidad vinculada", tone: "text-[#1F2933]" },
+  STUDY_QUOTED: { label: "Estudio cotizado", tone: "text-[#1F2933]" },
+  CLINIC_SELECTED: { label: "Clínica seleccionada", tone: "text-[#00875A]" },
+  FLOW_INTERRUPTED: { label: "Abandono / Pausa", tone: "text-[#52606D]" },
+  CHANNEL_SWITCH_DETECTED: { label: "Salto de canal detectado", tone: "text-[#1F2933]" },
+  OTP_CHALLENGE_SENT: { label: "OTP Step-Up enviado", tone: "text-[#1F2933]" },
+  OTP_VALIDATION_FAILED: { label: "OTP fallido (Auditado)", tone: "text-[#B42318]" },
+  IDENTITY_VERIFIED_OTP: { label: "OTP verificado", tone: "text-[#00875A]" },
+  CONTEXT_REHYDRATED: { label: "Contexto rehidratado", tone: "text-[#00875A]" },
+  PATIENT_QUESTION_LOGGED: { label: "Duda registrada", tone: "text-[#1F2933]" },
+  ADVISOR_ASSIGNED: { label: "Asesor asignado (Screen-Pop)", tone: "text-[#1F2933]" },
+  APPOINTMENT_CONFIRMED: { label: "Cita confirmada", tone: "text-[#00875A]" },
 };
 
 export function formatMoney(amount: number): string {

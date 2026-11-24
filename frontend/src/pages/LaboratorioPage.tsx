@@ -1,26 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import {
-  AlertCircle,
-  ArrowLeft,
-  ArrowRight,
-  BookmarkCheck,
-  Building2,
-  Calendar,
-  Check,
-  CheckCircle2,
-  Clock,
-  CreditCard,
-  FlaskConical,
-  Info,
-  Lock,
-  MapPin,
-  QrCode,
-  Store,
-  User,
-  UserCheck,
-  Users,
-} from "lucide-react";
+import { QrCode } from "lucide-react";
 import {
   api,
   getOrCreateWebSessionId,
@@ -69,9 +49,22 @@ function findStateCodeByNameOrCode(val: string | null | undefined): string {
   return match?.code || "";
 }
 
+function getPreparationSteps(prepText: string): string[] {
+  const parts = prepText
+    .split(/\.|;/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (parts.length > 1) return parts;
+  return [
+    prepText.trim(),
+    "Presentar identificación oficial vigente y folio de cita en recepción 15 minutos antes.",
+  ];
+}
+
 export const LaboratorioPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const initialCat = searchParams.get("cat") || "Todos";
+  const initialQuery = searchParams.get("q") || "";
   const resumeCaseIdParam = searchParams.get("resumeCaseId");
   const forBeneficiaryParam = searchParams.get("forBeneficiary");
 
@@ -87,6 +80,7 @@ export const LaboratorioPage: React.FC = () => {
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>(initialCat);
+  const [studyQuery, setStudyQuery] = useState<string>(initialQuery);
 
   // Paso 1: Estudio, Clínica y Horario
   const [selectedStudyCode, setSelectedStudyCode] = useState<string>("US-OBS");
@@ -97,12 +91,12 @@ export const LaboratorioPage: React.FC = () => {
   });
   const [preferredTime, setPreferredTime] = useState<string>("09:30");
 
-  // Selector Multibeneficiario ("Para mí" vs "Para un familiar o conocido")
+  // Selector Multibeneficiario
   const [forThirdParty, setForThirdParty] = useState<boolean>(Boolean(forBeneficiaryParam));
   const [relationship, setRelationship] = useState<RelationshipType>("HIJO_A");
   const [thirdPartyConsent, setThirdPartyConsent] = useState<boolean>(false);
 
-  // Paso 2: Campos oficiales "Perfil del paciente" (titular o beneficiario según el selector)
+  // Paso 2: Campos oficiales "Perfil del paciente"
   const [nombres, setNombres] = useState(() => (!forBeneficiaryParam ? loggedPatient?.nombres || "" : ""));
   const [apellidoPaterno, setApellidoPaterno] = useState(() =>
     !forBeneficiaryParam ? loggedPatient?.apellido_paterno || "" : ""
@@ -139,13 +133,28 @@ export const LaboratorioPage: React.FC = () => {
     null
   );
 
-  // Paso 3: Pago, Confirmación y Guardado para después
+  // Paso 3: Pago, Confirmación y Guardado
   const [paymentMethod, setPaymentMethod] = useState<"online" | "oxxo" | "clinic">("online");
   const [savedForLater, setSavedForLater] = useState(false);
   const [savingLater, setSavingLater] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
-  // Cargar catálogo + beneficiarios guardados + caso a retomar (si viene de N-saltos)
+  const applyBeneficiaryPreset = (b: PatientBeneficiaryItem) => {
+    setForThirdParty(true);
+    setRelationship(b.relationship);
+    setThirdPartyConsent(true);
+    setNombres(b.nombres || "");
+    setApellidoPaterno(b.apellido_paterno || "");
+    setApellidoMaterno(b.apellido_materno || "");
+    setFechaNacimiento(b.fecha_nacimiento || "");
+    setGenero(b.genero === "FEMENINO" || b.genero === "MASCULINO" ? b.genero : "");
+    setEstadoNacimientoCode(findStateCodeByNameOrCode(b.estado_nacimiento));
+    setPais((b.pais || "MÉXICO").toUpperCase());
+    setCurp(b.curp || "");
+    setCurpManuallyEdited(Boolean(b.curp));
+    if (loggedPatient?.telefono) setTelefono(loggedPatient.telefono);
+  };
+
   useEffect(() => {
     let active = true;
     setCatalogLoading(true);
@@ -170,7 +179,6 @@ export const LaboratorioPage: React.FC = () => {
         if (meRes) {
           setSavedBeneficiaries(meRes.beneficiaries || []);
 
-          // Si vino con ?forBeneficiary=... precargar los datos de ese familiar
           if (forBeneficiaryParam) {
             const foundB = (meRes.beneficiaries || []).find(
               (b) => b.beneficiaryId === forBeneficiaryParam
@@ -180,7 +188,6 @@ export const LaboratorioPage: React.FC = () => {
             }
           }
 
-          // Si vino con ?resumeCaseId=... rehidratar el trámite desde cualquier canal (N-saltos)
           if (resumeCaseIdParam) {
             const foundCase = (meRes.cases || []).find((c) => c.id === resumeCaseIdParam);
             if (foundCase) {
@@ -203,7 +210,6 @@ export const LaboratorioPage: React.FC = () => {
                   qrPayload: foundCase.contextJson.qr_payload || "",
                 });
               }
-              // Si ya tiene estudio y clínica, ir directo al Paso 3 para confirmar sin repetir pasos
               if (foundCase.contextJson.study && foundCase.contextJson.clinic) {
                 setStep(3);
               } else {
@@ -259,27 +265,9 @@ export const LaboratorioPage: React.FC = () => {
     setPais("MÉXICO");
     setCurp("");
     setCurpManuallyEdited(false);
-    // El teléfono de contacto por defecto sigue siendo el del Titular
     setTelefono(loggedPatient?.telefono || telefono);
   };
 
-  const applyBeneficiaryPreset = (b: PatientBeneficiaryItem) => {
-    setForThirdParty(true);
-    setRelationship(b.relationship);
-    setThirdPartyConsent(true);
-    setNombres(b.nombres || "");
-    setApellidoPaterno(b.apellido_paterno || "");
-    setApellidoMaterno(b.apellido_materno || "");
-    setFechaNacimiento(b.fecha_nacimiento || "");
-    setGenero(b.genero === "FEMENINO" || b.genero === "MASCULINO" ? b.genero : "");
-    setEstadoNacimientoCode(findStateCodeByNameOrCode(b.estado_nacimiento));
-    setPais((b.pais || "MÉXICO").toUpperCase());
-    setCurp(b.curp || "");
-    setCurpManuallyEdited(Boolean(b.curp));
-    if (loggedPatient?.telefono) setTelefono(loggedPatient.telefono);
-  };
-
-  // Autogeneración determinística de CURP
   useEffect(() => {
     if (curpManuallyEdited) return;
     if (!estadoNacimientoCode) {
@@ -311,9 +299,18 @@ export const LaboratorioPage: React.FC = () => {
   }, [studies]);
 
   const filteredStudies = useMemo(() => {
-    if (selectedCategory === "Todos") return studies;
-    return studies.filter((s) => s.category === selectedCategory);
-  }, [studies, selectedCategory]);
+    const q = studyQuery.trim().toLowerCase();
+    return studies.filter((s) => {
+      const catOk = selectedCategory === "Todos" || s.category === selectedCategory;
+      if (!catOk) return false;
+      if (!q) return true;
+      return (
+        s.name.toLowerCase().includes(q) ||
+        s.category.toLowerCase().includes(q) ||
+        s.prep.toLowerCase().includes(q)
+      );
+    });
+  }, [studies, selectedCategory, studyQuery]);
 
   const selectedStudy = useMemo(
     () => studies.find((s) => s.code === selectedStudyCode) || null,
@@ -432,7 +429,7 @@ export const LaboratorioPage: React.FC = () => {
       setSavedForLater(false);
       setConfirmedFolio(null);
       setStep(3);
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      window.scrollTo({ top: 0 });
     } catch (err) {
       setSubmitError(
         err instanceof Error ? err.message : "No fue posible guardar tu pre-registro y cotización."
@@ -484,382 +481,413 @@ export const LaboratorioPage: React.FC = () => {
   const finalPrice = paymentMethod === "online" ? basePrice - onlineDiscount : basePrice;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-      {/* Encabezado y Stepper */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-slate-100">
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-10 bg-[#FFFFFF] text-[#1F2933]">
+      {/* Encabezado y barra de pasos plana */}
+      <header className="space-y-6">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div>
-            <div className="text-xs font-bold uppercase tracking-wider text-[#00843D] flex items-center gap-1.5">
-              <FlaskConical className="w-4 h-4" />
-              Estudios y Citas en Línea
-            </div>
-            <h1 className="text-2xl font-extrabold text-slate-900 mt-0.5">
-              Agenda tus estudios de Laboratorio e Imagenología
+            <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
+              Estudios y citas en línea
+            </p>
+            <h1 className="text-3xl font-bold text-[#1F2933] mt-1">
+              Agenda tus estudios de laboratorio e imagenología
             </h1>
           </div>
           {activeCase && (
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs">
-              <span className="text-slate-500">Estatus:</span>
-              <span
-                className={`px-2 py-0.5 rounded-full font-bold border ${
-                  STATE_META[activeCase.currentState].badgeClass
-                }`}
-              >
+            <p className="text-xs text-[#52606D]">
+              Estatus actual:{" "}
+              <strong className={STATE_META[activeCase.currentState].textClass}>
                 {STATE_META[activeCase.currentState].label}
-              </span>
-            </div>
+              </strong>
+            </p>
           )}
         </div>
 
-        <div className="grid grid-cols-3 gap-2 sm:gap-4 pt-5">
+        <ol className="grid grid-cols-3 border-t border-b border-[#E4E7EB]">
           {[
-            { num: 1 as WizardStep, title: "Estudio y clínica", icon: Building2 },
-            { num: 2 as WizardStep, title: "Pre-registro", icon: UserCheck },
-            { num: 3 as WizardStep, title: "Resumen y pago", icon: CreditCard },
+            { num: 1 as WizardStep, title: "Estudio y clínica" },
+            { num: 2 as WizardStep, title: "Pre-registro" },
+            { num: 3 as WizardStep, title: "Resumen y pago" },
           ].map((item) => {
-            const Icon = item.icon;
             const isCurrent = step === item.num;
             const isDone = step > item.num;
             return (
-              <button
-                key={item.num}
-                type="button"
-                disabled={item.num === 3 && !activeCase}
-                onClick={() => {
-                  if (item.num <= step || (item.num === 2 && selectedStudy)) {
-                    setStep(item.num);
-                  }
-                }}
-                className={`flex items-center gap-3 p-3 rounded-xl border text-left transition ${
-                  isCurrent
-                    ? "bg-[#E6F4EC] border-[#00843D] text-[#005A2B]"
-                    : isDone
-                    ? "bg-white border-emerald-200 text-slate-800 hover:bg-slate-50"
-                    : "bg-slate-50 border-slate-200 text-slate-400"
-                }`}
-              >
-                <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 font-bold text-xs ${
+              <li key={item.num} className="border-r last:border-r-0 border-[#E4E7EB]">
+                <button
+                  type="button"
+                  disabled={item.num === 3 && !activeCase}
+                  onClick={() => {
+                    if (item.num <= step || (item.num === 2 && selectedStudy)) {
+                      setStep(item.num);
+                    }
+                  }}
+                  className={`w-full text-left py-4 px-3 sm:px-5 border-b-2 transition-colors ${
                     isCurrent
-                      ? "bg-[#00843D] text-white"
+                      ? "border-[#00875A] text-[#00875A]"
                       : isDone
-                      ? "bg-emerald-100 text-[#00843D]"
-                      : "bg-slate-200 text-slate-500"
+                      ? "border-transparent text-[#1F2933] hover:text-[#00875A]"
+                      : "border-transparent text-[#52606D] disabled:opacity-50"
                   }`}
                 >
-                  {isDone ? <Check className="w-4 h-4" /> : item.num}
-                </div>
-                <div className="min-w-0">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide opacity-75">
-                    Paso {item.num}
-                  </div>
-                  <div className="text-xs sm:text-sm font-bold truncate flex items-center gap-1.5">
-                    <Icon className="w-3.5 h-3.5 hidden sm:inline shrink-0" />
+                  <small className="block text-[11px] uppercase tracking-wider font-semibold">
+                    Paso 0{item.num} {isDone ? "· Completado" : ""}
+                  </small>
+                  <strong className="block text-sm font-semibold mt-0.5 truncate">
                     {item.title}
-                  </div>
-                </div>
-              </button>
+                  </strong>
+                </button>
+              </li>
             );
           })}
-        </div>
-      </div>
+        </ol>
+      </header>
 
       {catalogError && (
-        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{catalogError}</span>
-        </div>
+        <p className="border-l-2 border-[#B42318] pl-4 py-2 text-sm text-[#B42318]">
+          {catalogError}
+        </p>
       )}
 
-      {/* ==================== PASO 1: ESTUDIO Y CLÍNICA ==================== */}
+      {/* ==================== PASO 1: ESTUDIO, PREPARACIÓN Y CLÍNICA ==================== */}
       {step === 1 && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-8 space-y-6">
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
+          {/* Columna izquierda: Catálogo en lista vertical + Clínica y horarios en cuadrícula plana */}
+          <div className="lg:col-span-8 space-y-12">
+            <section className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900">1. Elige tu estudio</h2>
-                  <p className="text-xs text-slate-500">
+                  <h2 className="text-xl font-bold text-[#1F2933]">1. Elige tu estudio</h2>
+                  <p className="text-sm text-[#52606D] mt-1">
                     Precios vigentes e indicaciones previas a tu cita
                   </p>
                 </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {categories.map((cat) => (
+                <input
+                  type="search"
+                  value={studyQuery}
+                  onChange={(e) => setStudyQuery(e.target.value)}
+                  placeholder="Filtrar estudio..."
+                  aria-label="Filtrar estudios"
+                  className="h-10 w-full sm:w-64 px-3 border border-[#E4E7EB] text-sm text-[#1F2933] placeholder:text-[#52606D] focus:border-[#00875A]"
+                />
+              </div>
+
+              {/* Filtros de categoría planos con indicador inferior verde */}
+              <div className="flex flex-wrap gap-5 border-b border-[#E4E7EB]">
+                {categories.map((cat) => {
+                  const active = selectedCategory === cat;
+                  return (
                     <button
                       key={cat}
                       type="button"
                       onClick={() => setSelectedCategory(cat)}
-                      className={`px-3 py-1 rounded-full text-xs font-semibold transition ${
-                        selectedCategory === cat
-                          ? "bg-[#00843D] text-white"
-                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      className={`pb-2.5 text-sm border-b-2 transition-colors ${
+                        active
+                          ? "border-[#00875A] text-[#00875A] font-semibold"
+                          : "border-transparent text-[#52606D] hover:text-[#1F2933]"
                       }`}
                     >
                       {cat}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {catalogLoading ? (
-                <div className="py-10 text-center text-sm text-slate-400">
-                  Cargando catálogo de estudios...
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                  {filteredStudies.map((study) => {
-                    const active = study.code === selectedStudyCode;
-                    return (
-                      <button
-                        key={study.code}
-                        type="button"
-                        onClick={() => setSelectedStudyCode(study.code)}
-                        className={`text-left p-4 rounded-xl border transition flex flex-col justify-between ${
-                          active
-                            ? "border-[#00843D] bg-[#E6F4EC]/50 ring-2 ring-[#00843D]/20"
-                            : "border-slate-200 hover:border-slate-300 bg-white"
-                        }`}
-                      >
-                        <div>
-                          <div className="flex items-start justify-between gap-2">
-                            <span className="text-[11px] font-bold uppercase tracking-wide text-[#0066B3]">
-                              {study.category}
-                            </span>
-                            <span className="text-base font-extrabold text-[#00843D]">
-                              {formatMoney(study.price)}
-                            </span>
-                          </div>
-                          <h3 className="text-sm font-bold text-slate-900 mt-1">{study.name}</h3>
-                          <p className="text-xs text-slate-500 mt-1.5 leading-relaxed flex items-start gap-1.5">
-                            <Info className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                            <span>{study.prep}</span>
-                          </p>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm space-y-4">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">
-                  2. Selecciona tu clínica y horario preferido
-                </h2>
-                <p className="text-xs text-slate-500">Elige la sucursal más cercana</p>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                {clinics.map((clinic) => {
-                  const active = clinic.id === selectedClinicId;
-                  return (
-                    <button
-                      key={clinic.id}
-                      type="button"
-                      onClick={() => setSelectedClinicId(clinic.id)}
-                      className={`text-left p-4 rounded-xl border transition ${
-                        active
-                          ? "border-[#00843D] bg-[#E6F4EC]/50 ring-2 ring-[#00843D]/20"
-                          : "border-slate-200 hover:border-slate-300 bg-white"
-                      }`}
-                    >
-                      <div className="flex items-start gap-2">
-                        <MapPin
-                          className={`w-4 h-4 shrink-0 mt-0.5 ${
-                            active ? "text-[#00843D]" : "text-slate-400"
-                          }`}
-                        />
-                        <div>
-                          <div className="text-sm font-bold text-slate-900">{clinic.name}</div>
-                          <div className="text-xs text-slate-500 mt-0.5">{clinic.address}</div>
-                          <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            {clinic.hours}
-                          </div>
-                        </div>
-                      </div>
                     </button>
                   );
                 })}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-100">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+              {catalogLoading ? (
+                <p className="py-10 text-sm text-[#52606D]">Cargando catálogo de estudios...</p>
+              ) : filteredStudies.length === 0 ? (
+                <p className="py-10 text-sm text-[#52606D]">
+                  No se encontraron estudios con el filtro aplicado.
+                </p>
+              ) : (
+                <ul className="divide-y divide-[#E4E7EB] border-b border-[#E4E7EB]">
+                  {filteredStudies.map((study) => {
+                    const active = study.code === selectedStudyCode;
+                    return (
+                      <li
+                        key={study.code}
+                        className={`py-5 pl-4 border-l-2 transition-colors ${
+                          active ? "border-[#00875A]" : "border-transparent"
+                        }`}
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                          <div className="space-y-1 max-w-xl">
+                            <small className="block text-[11px] font-semibold uppercase tracking-wider text-[#00875A]">
+                              {study.category}
+                            </small>
+                            <h3 className="text-base font-bold text-[#1F2933]">{study.name}</h3>
+                            <p className="text-sm text-[#52606D] leading-relaxed">{study.prep}</p>
+                          </div>
+                          <div className="flex sm:flex-col items-center sm:items-end justify-between gap-2 shrink-0">
+                            <strong className="text-lg font-bold text-[#1F2933]">
+                              {formatMoney(study.price)}
+                            </strong>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedStudyCode(study.code)}
+                              className={`px-3.5 py-1.5 text-xs font-semibold border transition-colors ${
+                                active
+                                  ? "bg-[#00875A] border-[#00875A] text-[#FFFFFF]"
+                                  : "bg-[#FFFFFF] border-[#E4E7EB] text-[#00875A] hover:border-[#00875A]"
+                              }`}
+                            >
+                              {active ? "Seleccionado" : "Seleccionar"}
+                            </button>
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+
+            {/* Selección de clínica en lista vertical limpia + horarios en cuadrícula plana 1px */}
+            <section className="space-y-6">
+              <div className="pb-4 border-b border-[#E4E7EB]">
+                <h2 className="text-xl font-bold text-[#1F2933]">
+                  2. Selecciona clínica, fecha y horario
+                </h2>
+                <p className="text-sm text-[#52606D] mt-1">
+                  Elige la sucursal más cercana y tu horario preferido
+                </p>
+              </div>
+
+              <ul className="divide-y divide-[#E4E7EB] border-b border-[#E4E7EB]">
+                {clinics.map((clinic) => {
+                  const active = clinic.id === selectedClinicId;
+                  return (
+                    <li
+                      key={clinic.id}
+                      className={`py-4 pl-4 border-l-2 ${
+                        active ? "border-[#00875A]" : "border-transparent"
+                      }`}
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-sm font-bold text-[#1F2933]">{clinic.name}</h3>
+                          <p className="text-xs text-[#52606D] mt-0.5">{clinic.address}</p>
+                          <p className="text-xs text-[#52606D] mt-0.5">{clinic.hours}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedClinicId(clinic.id)}
+                          className={`self-start sm:self-center px-3.5 py-1.5 text-xs font-semibold border transition-colors shrink-0 ${
+                            active
+                              ? "bg-[#00875A] border-[#00875A] text-[#FFFFFF]"
+                              : "bg-[#FFFFFF] border-[#E4E7EB] text-[#00875A] hover:border-[#00875A]"
+                          }`}
+                        >
+                          {active ? "Clínica elegida" : "Elegir clínica"}
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-6 pt-2">
+                <div className="sm:col-span-5">
+                  <label
+                    htmlFor="preferred-date-input"
+                    className="block text-xs font-semibold text-[#1F2933] mb-2"
+                  >
                     Fecha deseada
                   </label>
                   <input
+                    id="preferred-date-input"
                     type="date"
                     value={preferredDate}
                     onChange={(e) => setPreferredDate(e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#00843D]/30 focus:border-[#00843D]"
+                    className="w-full h-11 border border-[#E4E7EB] px-3 text-sm text-[#1F2933] focus:border-[#00875A]"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                    Horario preferido
-                  </label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {TIME_SLOTS.map((slot) => (
-                      <button
-                        key={slot}
-                        type="button"
-                        onClick={() => setPreferredTime(slot)}
-                        className={`px-3 py-2 rounded-lg text-xs font-semibold border transition ${
-                          preferredTime === slot
-                            ? "bg-[#0066B3] text-white border-[#0066B3]"
-                            : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
-                        }`}
-                      >
-                        {slot}
-                      </button>
-                    ))}
+                <div className="sm:col-span-7">
+                  <p className="text-xs font-semibold text-[#1F2933] mb-2">Horario preferido</p>
+                  <div className="grid grid-cols-4 sm:grid-cols-4 border-t border-l border-[#E4E7EB]">
+                    {TIME_SLOTS.map((slot) => {
+                      const active = preferredTime === slot;
+                      return (
+                        <button
+                          key={slot}
+                          type="button"
+                          onClick={() => setPreferredTime(slot)}
+                          className={`h-11 text-xs font-semibold border-r border-b border-[#E4E7EB] transition-colors ${
+                            active
+                              ? "bg-[#00875A] text-[#FFFFFF]"
+                              : "bg-[#FFFFFF] text-[#1F2933] hover:bg-[#F7F8F9]"
+                          }`}
+                        >
+                          {slot}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
-            </div>
+            </section>
           </div>
 
-          <div className="lg:col-span-4">
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm sticky top-24 space-y-4">
-              <h3 className="text-base font-bold text-slate-900 border-b border-slate-100 pb-3">
-                Resumen de tu estudio
-              </h3>
-              {selectedStudy && (
-                <div className="space-y-3 text-sm">
-                  <div>
-                    <div className="text-xs text-slate-400">Estudio seleccionado</div>
-                    <div className="font-bold text-slate-900">{selectedStudy.name}</div>
+          {/* Columna derecha: Detalle, preparación (<ol>), precio y botón principal naranja */}
+          <aside className="lg:col-span-4 lg:border-l lg:border-[#E4E7EB] lg:pl-8 lg:sticky lg:top-24 space-y-6">
+            <h2 className="text-lg font-bold text-[#1F2933] pb-3 border-b border-[#E4E7EB]">
+              Resumen y preparación
+            </h2>
+
+            {selectedStudy && (
+              <>
+                <dl className="divide-y divide-[#E4E7EB] text-sm">
+                  <div className="py-3">
+                    <dt className="text-xs text-[#52606D]">Estudio seleccionado</dt>
+                    <dd className="font-semibold text-[#1F2933] mt-0.5">{selectedStudy.name}</dd>
                   </div>
                   {selectedClinic && (
-                    <div>
-                      <div className="text-xs text-slate-400">Clínica</div>
-                      <div className="font-semibold text-slate-800">{selectedClinic.name}</div>
-                      <div className="text-xs text-slate-500">{selectedClinic.city}</div>
+                    <div className="py-3">
+                      <dt className="text-xs text-[#52606D]">Clínica</dt>
+                      <dd className="font-semibold text-[#1F2933] mt-0.5">{selectedClinic.name}</dd>
+                      <dd className="text-xs text-[#52606D]">{selectedClinic.city}</dd>
                     </div>
                   )}
-                  <div>
-                    <div className="text-xs text-slate-400">Cita tentativa</div>
-                    <div className="font-semibold text-slate-800">
-                      {preferredDate} · {preferredTime} hrs
-                    </div>
+                  <div className="py-3">
+                    <dt className="text-xs text-[#52606D]">Cita tentativa</dt>
+                    <dd className="font-semibold text-[#1F2933] mt-0.5">
+                      <time dateTime={`${preferredDate}T${preferredTime}`}>
+                        {preferredDate} · {preferredTime} hrs
+                      </time>
+                    </dd>
                   </div>
-                  <div className="p-3 rounded-xl bg-[#EBF4FC] text-[#005291] text-xs leading-relaxed">
-                    <strong>Preparación:</strong> {selectedStudy.prep}
-                  </div>
-                  <div className="pt-3 border-t border-slate-100 flex items-baseline justify-between">
-                    <span className="text-xs font-semibold text-slate-500">Precio en clínica</span>
-                    <span className="text-xl font-extrabold text-[#00843D]">
-                      {formatMoney(selectedStudy.price)}
-                    </span>
-                  </div>
-                  <div className="text-[11px] text-[#00843D] bg-[#E6F4EC] px-3 py-1.5 rounded-lg font-medium">
-                    Ahorra 10% pagando en línea ({formatMoney(basePrice - onlineDiscount)})
-                  </div>
-                </div>
-              )}
+                </dl>
 
-              <button
-                type="button"
-                disabled={!selectedStudy || !selectedClinic}
-                onClick={() => {
-                  setStep(2);
-                  window.scrollTo({ top: 0, behavior: "smooth" });
-                }}
-                className="w-full bg-[#00843D] hover:bg-[#006E32] text-white font-bold py-3 px-4 rounded-xl transition shadow-sm flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                Continuar al pre-registro
-                <ArrowRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
+                <div className="pt-2 border-t border-[#E4E7EB] space-y-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-[#00875A]">
+                    Indicaciones de preparación
+                  </h3>
+                  <ol className="list-decimal pl-5 space-y-1.5 text-xs text-[#52606D] leading-relaxed">
+                    {getPreparationSteps(selectedStudy.prep).map((instruction, index) => (
+                      <li key={index}>{instruction}</li>
+                    ))}
+                  </ol>
+                </div>
+
+                <div className="pt-4 border-t border-[#E4E7EB] space-y-1">
+                  <div className="flex items-baseline justify-between">
+                    <p className="text-xs text-[#52606D]">Precio en clínica</p>
+                    <strong className="text-2xl font-bold text-[#1F2933]">
+                      {formatMoney(selectedStudy.price)}
+                    </strong>
+                  </div>
+                  <p className="text-xs font-medium text-[#00875A]">
+                    Pagando en línea: {formatMoney(basePrice - onlineDiscount)} (10% de ahorro)
+                  </p>
+                </div>
+              </>
+            )}
+
+            <button
+              type="button"
+              disabled={!selectedStudy || !selectedClinic}
+              onClick={() => {
+                setStep(2);
+                window.scrollTo({ top: 0 });
+              }}
+              className="w-full h-12 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] text-sm font-semibold transition-colors disabled:opacity-50"
+            >
+              Continuar al pre-registro
+            </button>
+          </aside>
         </div>
       )}
 
-      {/* ==================== PASO 2: PRE-REGISTRO MULTIBENEFICIARIO ("Perfil del paciente") ==================== */}
+      {/* ==================== PASO 2: PRE-REGISTRO MULTIBENEFICIARIO ==================== */}
       {step === 2 && (
-        <div className="max-w-2xl mx-auto space-y-4">
+        <div className="max-w-2xl space-y-8">
           <button
             type="button"
             onClick={() => setStep(1)}
-            className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-900 font-semibold"
+            className="text-xs font-semibold text-[#00875A] hover:underline"
           >
-            <ArrowLeft className="w-4 h-4" />
-            Cambiar estudio o clínica ({selectedStudy?.name})
+            ← Cambiar estudio o clínica ({selectedStudy?.name})
           </button>
 
-          {/* Selector ¿Para quién es este estudio? (Titular vs Familiar/Conocido) */}
-          <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-5 shadow-sm space-y-3">
-            <div className="text-sm font-bold text-slate-900">¿Para quién es este estudio?</div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Selector ¿Para quién es este estudio? */}
+          <section className="space-y-4 pb-6 border-b border-[#E4E7EB]">
+            <h2 className="text-lg font-bold text-[#1F2933]">¿Para quién es este estudio?</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 border border-[#E4E7EB]">
               <button
                 type="button"
                 onClick={applySelfPreset}
-                className={`p-3.5 rounded-xl border text-left transition flex items-center gap-3 ${
+                className={`p-4 text-left border-b sm:border-b-0 sm:border-r border-[#E4E7EB] transition-colors ${
                   !forThirdParty
-                    ? "border-[#00843D] bg-[#E6F4EC] text-[#005A2B] ring-1 ring-[#00843D]"
-                    : "border-slate-200 hover:border-slate-300 text-slate-700"
+                    ? "bg-[#00875A] text-[#FFFFFF]"
+                    : "bg-[#FFFFFF] text-[#1F2933] hover:bg-[#F7F8F9]"
                 }`}
               >
-                <div className="w-9 h-9 rounded-lg bg-white border border-slate-200/80 flex items-center justify-center shrink-0">
-                  <User className="w-4 h-4 text-[#00843D]" />
-                </div>
-                <div>
-                  <div className="text-sm font-bold">Para mí (Titular)</div>
-                  <div className="text-[11px] opacity-80">Usar mis datos de paciente</div>
-                </div>
+                <strong className="block text-sm font-semibold">Para mí (Titular)</strong>
+                <small
+                  className={`block text-xs mt-0.5 ${
+                    !forThirdParty ? "text-[#FFFFFF]" : "text-[#52606D]"
+                  }`}
+                >
+                  Usar mis datos de paciente
+                </small>
               </button>
 
               <button
                 type="button"
                 onClick={applyThirdPartyBlank}
-                className={`p-3.5 rounded-xl border text-left transition flex items-center gap-3 ${
+                className={`p-4 text-left transition-colors ${
                   forThirdParty
-                    ? "border-[#00843D] bg-[#E6F4EC] text-[#005A2B] ring-1 ring-[#00843D]"
-                    : "border-slate-200 hover:border-slate-300 text-slate-700"
+                    ? "bg-[#00875A] text-[#FFFFFF]"
+                    : "bg-[#FFFFFF] text-[#1F2933] hover:bg-[#F7F8F9]"
                 }`}
               >
-                <div className="w-9 h-9 rounded-lg bg-white border border-slate-200/80 flex items-center justify-center shrink-0">
-                  <Users className="w-4 h-4 text-[#0066B3]" />
-                </div>
-                <div>
-                  <div className="text-sm font-bold">Para un familiar o conocido</div>
-                  <div className="text-[11px] opacity-80">Expediente clínico separado</div>
-                </div>
+                <strong className="block text-sm font-semibold">
+                  Para un familiar o conocido
+                </strong>
+                <small
+                  className={`block text-xs mt-0.5 ${
+                    forThirdParty ? "text-[#FFFFFF]" : "text-[#52606D]"
+                  }`}
+                >
+                  Expediente clínico independiente
+                </small>
               </button>
             </div>
 
             {forThirdParty && (
-              <div className="pt-2 space-y-3 border-t border-slate-100">
+              <div className="space-y-4 pt-2">
                 {savedBeneficiaries.length > 0 && (
-                  <div className="space-y-1.5">
-                    <div className="text-xs font-semibold text-slate-600">
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-[#52606D]">
                       O selecciona un familiar ya registrado:
-                    </div>
-                    <div className="flex flex-wrap gap-2">
+                    </p>
+                    <ul className="flex flex-wrap gap-2">
                       {savedBeneficiaries.map((b) => (
-                        <button
-                          key={b.relationshipId}
-                          type="button"
-                          onClick={() => applyBeneficiaryPreset(b)}
-                          className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-[#E6F4EC] hover:text-[#005A2B] text-xs font-semibold text-slate-700 transition"
-                        >
-                          {b.nombres} {b.apellido_paterno} ({b.relationshipLabel})
-                        </button>
+                        <li key={b.relationshipId}>
+                          <button
+                            type="button"
+                            onClick={() => applyBeneficiaryPreset(b)}
+                            className="px-3 py-1.5 border border-[#E4E7EB] text-xs font-semibold text-[#00875A] hover:border-[#00875A] transition-colors"
+                          >
+                            {b.nombres} {b.apellido_paterno} ({b.relationshipLabel})
+                          </button>
+                        </li>
                       ))}
-                    </div>
+                    </ul>
                   </div>
                 )}
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                  <label
+                    htmlFor="lab-relationship"
+                    className="block text-xs font-semibold text-[#1F2933] mb-1.5"
+                  >
                     Parentesco / Relación con el titular *
                   </label>
                   <select
+                    id="lab-relationship"
                     value={relationship}
                     onChange={(e) => setRelationship(e.target.value as RelationshipType)}
-                    className="w-full h-11 rounded-md border border-[#CBD5E1] bg-white px-3 text-sm text-slate-800 focus:outline-none focus:border-[#00843D]"
+                    className="w-full h-11 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-sm text-[#1F2933] focus:border-[#00875A]"
                   >
                     {RELATIONSHIP_OPTIONS.map((opt) => (
                       <option key={opt.value} value={opt.value}>
@@ -870,253 +898,271 @@ export const LaboratorioPage: React.FC = () => {
                 </div>
               </div>
             )}
-          </div>
+          </section>
 
           {!loggedPatient && (
-            <div className="p-3.5 rounded-xl bg-[#EBF4FC] border border-blue-200/80 text-[#005291] text-xs flex flex-wrap items-center justify-between gap-2">
-              <span>
-                ¿Ya tienes cuenta en Salud Digna? Inicia sesión para cargar tus datos y familiares.
-              </span>
-              <Link
-                to="/login?next=/laboratorio"
-                className="font-bold underline hover:text-[#003c6b]"
-              >
-                Iniciar sesión
+            <p className="border-l-2 border-[#00875A] pl-4 py-1 text-xs text-[#52606D]">
+              ¿Ya tienes cuenta en Salud Digna?{" "}
+              <Link to="/login?next=/laboratorio" className="font-semibold text-[#00875A] underline">
+                Inicia sesión para precargar tus datos y familiares
               </Link>
-            </div>
+              .
+            </p>
           )}
 
           {submitError && (
-            <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{submitError}</span>
-            </div>
+            <p className="border-l-2 border-[#B42318] pl-4 py-1 text-sm text-[#B42318]">
+              {submitError}
+            </p>
           )}
 
           {/* Formulario oficial "Perfil del paciente" */}
-          <form
-            onSubmit={handleSubmitProfileAndQuote}
-            className="bg-white rounded-xl border border-slate-200 shadow-sm px-6 sm:px-8 py-7 text-[#475569]"
-          >
-            <h2 className="text-[22px] font-bold text-[#4B5563] leading-snug">
-              {forThirdParty ? "Perfil del paciente beneficiario" : "Perfil del paciente"}
-            </h2>
-            <p className="text-[15px] text-[#4B5563] mt-2 leading-relaxed">
-              Recuerda que los datos deben coincidir con la identificación oficial de quien se
-              realizará el estudio, ya que para ciertos estudios se requiere presentarla.
-            </p>
-
-            <h3 className="text-[17px] font-bold text-[#4B5563] mt-6 mb-4">Datos personales</h3>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-              <input
-                type="text"
-                required
-                value={nombres}
-                onChange={(e) => {
-                  setCurpManuallyEdited(false);
-                  setNombres(e.target.value);
-                }}
-                placeholder="Nombre(s) *"
-                className="w-full h-12 rounded-md border border-[#CBD5E1] px-3.5 text-[15px] text-slate-800 placeholder:text-[#94A3B8] focus:outline-none focus:border-[#00843D] focus:ring-1 focus:ring-[#00843D]"
-              />
-              <input
-                type="text"
-                required
-                value={apellidoPaterno}
-                onChange={(e) => {
-                  setCurpManuallyEdited(false);
-                  setApellidoPaterno(e.target.value);
-                }}
-                placeholder="Apellido paterno *"
-                className="w-full h-12 rounded-md border border-[#CBD5E1] px-3.5 text-[15px] text-slate-800 placeholder:text-[#94A3B8] focus:outline-none focus:border-[#00843D] focus:ring-1 focus:ring-[#00843D]"
-              />
+          <form onSubmit={handleSubmitProfileAndQuote} className="space-y-6">
+            <div>
+              <h2 className="text-xl font-bold text-[#1F2933]">
+                {forThirdParty ? "Perfil del paciente beneficiario" : "Perfil del paciente"}
+              </h2>
+              <p className="text-sm text-[#52606D] mt-1 leading-relaxed">
+                Los datos deben coincidir con la identificación oficial de quien se realizará el
+                estudio.
+              </p>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mt-4">
-              <input
-                type="text"
-                value={apellidoMaterno}
-                onChange={(e) => {
-                  setCurpManuallyEdited(false);
-                  setApellidoMaterno(e.target.value);
-                }}
-                placeholder="Apellido materno"
-                className="w-full h-12 rounded-md border border-[#CBD5E1] px-3.5 text-[15px] text-slate-800 placeholder:text-[#94A3B8] focus:outline-none focus:border-[#00843D] focus:ring-1 focus:ring-[#00843D]"
-              />
+            <div className="space-y-4">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-[#00875A]">
+                Datos personales
+              </h3>
 
-              <div className="relative">
-                <label
-                  htmlFor="sd-fecha-nacimiento"
-                  className="absolute -top-2.5 left-3 bg-white px-1 text-[12px] font-medium text-[#64748B] z-10 pointer-events-none"
-                >
-                  Fecha de nacimiento *
-                </label>
-                <div
-                  onClick={() => dateInputRef.current?.showPicker?.()}
-                  className="relative w-full h-12 rounded-md border border-[#CBD5E1] px-3.5 flex items-center justify-between bg-white focus-within:border-[#00843D] focus-within:ring-1 focus-within:ring-[#00843D] cursor-pointer"
-                >
-                  <span
-                    className={`text-[15px] select-none ${
-                      fechaNacimiento ? "text-slate-800" : "text-[#475569]"
-                    }`}
-                  >
-                    {formatDateDisplay(fechaNacimiento)}
-                  </span>
-                  <Calendar className="w-5 h-5 text-[#0072CE] shrink-0 pointer-events-none" />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="lab-nombres" className="block text-xs font-semibold text-[#1F2933] mb-1.5">
+                    Nombre(s) *
+                  </label>
                   <input
-                    ref={dateInputRef}
-                    id="sd-fecha-nacimiento"
-                    type="date"
+                    id="lab-nombres"
+                    type="text"
                     required
-                    value={fechaNacimiento}
+                    value={nombres}
                     onChange={(e) => {
                       setCurpManuallyEdited(false);
-                      setFechaNacimiento(e.target.value);
+                      setNombres(e.target.value);
                     }}
-                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                    placeholder="Nombre(s)"
+                    className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm text-[#1F2933] placeholder:text-[#52606D] focus:border-[#00875A]"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="lab-paterno" className="block text-xs font-semibold text-[#1F2933] mb-1.5">
+                    Apellido paterno *
+                  </label>
+                  <input
+                    id="lab-paterno"
+                    type="text"
+                    required
+                    value={apellidoPaterno}
+                    onChange={(e) => {
+                      setCurpManuallyEdited(false);
+                      setApellidoPaterno(e.target.value);
+                    }}
+                    placeholder="Apellido paterno"
+                    className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm text-[#1F2933] placeholder:text-[#52606D] focus:border-[#00875A]"
                   />
                 </div>
               </div>
-            </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-12 gap-3 mt-5 items-center">
-              <button
-                type="button"
-                onClick={() => {
-                  setCurpManuallyEdited(false);
-                  setGenero("FEMENINO");
-                }}
-                className={`sm:col-span-3 h-12 rounded-md border px-3 flex items-center justify-center gap-2 text-[15px] font-medium transition ${
-                  genero === "FEMENINO"
-                    ? "border-[#00843D] bg-[#E6F4EC] text-[#005A2B] ring-1 ring-[#00843D]"
-                    : "border-[#CBD5E1] bg-white text-[#475569] hover:border-slate-400"
-                }`}
-              >
-                <FemaleIcon className="w-5 h-5 shrink-0" />
-                <span>Mujer</span>
-              </button>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="lab-materno" className="block text-xs font-semibold text-[#1F2933] mb-1.5">
+                    Apellido materno
+                  </label>
+                  <input
+                    id="lab-materno"
+                    type="text"
+                    value={apellidoMaterno}
+                    onChange={(e) => {
+                      setCurpManuallyEdited(false);
+                      setApellidoMaterno(e.target.value);
+                    }}
+                    placeholder="Apellido materno"
+                    className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm text-[#1F2933] placeholder:text-[#52606D] focus:border-[#00875A]"
+                  />
+                </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  setCurpManuallyEdited(false);
-                  setGenero("MASCULINO");
-                }}
-                className={`sm:col-span-3 h-12 rounded-md border px-3 flex items-center justify-center gap-2 text-[15px] font-medium transition ${
-                  genero === "MASCULINO"
-                    ? "border-[#00843D] bg-[#E6F4EC] text-[#005A2B] ring-1 ring-[#00843D]"
-                    : "border-[#CBD5E1] bg-white text-[#475569] hover:border-slate-400"
-                }`}
-              >
-                <MaleIcon className="w-5 h-5 shrink-0" />
-                <span>Hombre</span>
-              </button>
-
-              <div className="col-span-2 sm:col-span-6">
-                <select
-                  required
-                  value={estadoNacimientoCode}
-                  onChange={(e) => {
-                    setCurpManuallyEdited(false);
-                    setEstadoNacimientoCode(e.target.value);
-                  }}
-                  className="w-full h-12 rounded-md border border-[#CBD5E1] bg-white px-3 text-[15px] text-[#334155] focus:outline-none focus:border-[#00843D] focus:ring-1 focus:ring-[#00843D]"
-                >
-                  <option value="">Seleccione estado de nacimiento</option>
-                  {MEXICAN_STATES.map((st) => (
-                    <option key={st.code} value={st.code}>
-                      {st.name}
-                    </option>
-                  ))}
-                </select>
+                <div>
+                  <label
+                    htmlFor="sd-fecha-nacimiento"
+                    className="block text-xs font-semibold text-[#1F2933] mb-1.5"
+                  >
+                    Fecha de nacimiento *
+                  </label>
+                  <div
+                    onClick={() => dateInputRef.current?.showPicker?.()}
+                    className="relative w-full h-11 border border-[#E4E7EB] px-3.5 flex items-center justify-between bg-[#FFFFFF] cursor-pointer"
+                  >
+                    <p className="text-sm text-[#1F2933]">{formatDateDisplay(fechaNacimiento)}</p>
+                    <small className="text-xs text-[#00875A] font-semibold">Calendario</small>
+                    <input
+                      ref={dateInputRef}
+                      id="sd-fecha-nacimiento"
+                      type="date"
+                      required
+                      value={fechaNacimiento}
+                      onChange={(e) => {
+                        setCurpManuallyEdited(false);
+                        setFechaNacimiento(e.target.value);
+                      }}
+                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                    />
+                  </div>
+                </div>
               </div>
-            </div>
 
-            <p className="text-[14.5px] text-[#4B5563] mt-5 leading-relaxed">
-              Al seleccionar el estado de nacimiento, consultaremos tu CURP automáticamente.
-            </p>
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-end">
+                <div className="sm:col-span-6">
+                  <p className="text-xs font-semibold text-[#1F2933] mb-1.5">Género *</p>
+                  <div className="grid grid-cols-2 border border-[#E4E7EB]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCurpManuallyEdited(false);
+                        setGenero("FEMENINO");
+                      }}
+                      className={`h-11 text-sm font-semibold border-r border-[#E4E7EB] transition-colors ${
+                        genero === "FEMENINO"
+                          ? "bg-[#00875A] text-[#FFFFFF]"
+                          : "bg-[#FFFFFF] text-[#1F2933] hover:bg-[#F7F8F9]"
+                      }`}
+                    >
+                      Mujer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCurpManuallyEdited(false);
+                        setGenero("MASCULINO");
+                      }}
+                      className={`h-11 text-sm font-semibold transition-colors ${
+                        genero === "MASCULINO"
+                          ? "bg-[#00875A] text-[#FFFFFF]"
+                          : "bg-[#FFFFFF] text-[#1F2933] hover:bg-[#F7F8F9]"
+                      }`}
+                    >
+                      Hombre
+                    </button>
+                  </div>
+                </div>
 
-            <div className="mt-4">
-              <label className="block text-[14px] font-semibold text-[#1E293B] mb-1.5">
-                País *
-              </label>
-              <select
-                required
-                value={pais}
-                onChange={(e) => setPais(e.target.value)}
-                className="w-full h-12 rounded-md border border-[#CBD5E1] bg-[#F1F5F9] px-3.5 text-[15px] text-[#334155] focus:outline-none focus:bg-white focus:border-[#00843D] focus:ring-1 focus:ring-[#00843D]"
-              >
-                <option value="MÉXICO">MÉXICO</option>
-                <option value="ESTADOS UNIDOS">ESTADOS UNIDOS</option>
-                <option value="OTRO">OTRO</option>
-              </select>
-            </div>
+                <div className="sm:col-span-6">
+                  <label
+                    htmlFor="lab-estado"
+                    className="block text-xs font-semibold text-[#1F2933] mb-1.5"
+                  >
+                    Estado de nacimiento *
+                  </label>
+                  <select
+                    id="lab-estado"
+                    required
+                    value={estadoNacimientoCode}
+                    onChange={(e) => {
+                      setCurpManuallyEdited(false);
+                      setEstadoNacimientoCode(e.target.value);
+                    }}
+                    className="w-full h-11 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-sm text-[#1F2933] focus:border-[#00875A]"
+                  >
+                    <option value="">Seleccione estado</option>
+                    {MEXICAN_STATES.map((st) => (
+                      <option key={st.code} value={st.code}>
+                        {st.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
 
-            <div className="mt-4">
-              <label className="block text-[14px] font-semibold text-[#1E293B] mb-1.5">
-                CURP *
-              </label>
-              <input
-                type="text"
-                required
-                maxLength={18}
-                value={curp}
-                onChange={(e) => {
-                  setCurpManuallyEdited(true);
-                  setCurp(e.target.value.toUpperCase());
-                }}
-                placeholder="Se generará automáticamente"
-                className="w-full h-12 rounded-md border border-[#CBD5E1] bg-[#F1F5F9] px-3.5 text-[15px] font-medium tracking-wide text-[#334155] placeholder:text-[#64748B] placeholder:font-normal placeholder:tracking-normal focus:outline-none focus:bg-white focus:border-[#00843D] focus:ring-1 focus:ring-[#00843D]"
-              />
-            </div>
+              <p className="text-xs text-[#52606D]">
+                Al seleccionar el estado de nacimiento, consultaremos tu CURP automáticamente.
+              </p>
 
-            <div className="mt-5">
-              <input
-                type="tel"
-                required
-                value={telefono}
-                onChange={(e) => setTelefono(e.target.value)}
-                placeholder={
-                  forThirdParty
-                    ? "Teléfono de contacto del titular *"
-                    : "Teléfono *"
-                }
-                className="w-full h-12 rounded-md border border-[#CBD5E1] px-3.5 text-[15px] text-slate-800 placeholder:text-[#94A3B8] focus:outline-none focus:border-[#00843D] focus:ring-1 focus:ring-[#00843D]"
-              />
-            </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="lab-pais" className="block text-xs font-semibold text-[#1F2933] mb-1.5">
+                    País *
+                  </label>
+                  <select
+                    id="lab-pais"
+                    required
+                    value={pais}
+                    onChange={(e) => setPais(e.target.value)}
+                    className="w-full h-11 border border-[#E4E7EB] bg-[#FFFFFF] px-3.5 text-sm text-[#1F2933] focus:border-[#00875A]"
+                  >
+                    <option value="MÉXICO">MÉXICO</option>
+                    <option value="ESTADOS UNIDOS">ESTADOS UNIDOS</option>
+                    <option value="OTRO">OTRO</option>
+                  </select>
+                </div>
 
-            {forThirdParty && (
-              <label className="mt-5 p-4 rounded-xl bg-amber-50 border border-amber-200 flex items-start gap-3 cursor-pointer">
+                <div>
+                  <label htmlFor="lab-curp" className="block text-xs font-semibold text-[#1F2933] mb-1.5">
+                    CURP *
+                  </label>
+                  <input
+                    id="lab-curp"
+                    type="text"
+                    required
+                    maxLength={18}
+                    value={curp}
+                    onChange={(e) => {
+                      setCurpManuallyEdited(true);
+                      setCurp(e.target.value.toUpperCase());
+                    }}
+                    placeholder="Se generará automáticamente"
+                    className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm font-mono text-[#1F2933] placeholder:font-sans placeholder:text-[#52606D] focus:border-[#00875A]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="lab-tel" className="block text-xs font-semibold text-[#1F2933] mb-1.5">
+                  {forThirdParty ? "Teléfono de contacto del titular *" : "Teléfono *"}
+                </label>
                 <input
-                  type="checkbox"
-                  checked={thirdPartyConsent}
-                  onChange={(e) => setThirdPartyConsent(e.target.checked)}
-                  className="mt-1 w-4 h-4 accent-[#00843D]"
+                  id="lab-tel"
+                  type="tel"
+                  required
+                  value={telefono}
+                  onChange={(e) => setTelefono(e.target.value)}
+                  placeholder="10 dígitos o +52..."
+                  className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm text-[#1F2933] placeholder:text-[#52606D] focus:border-[#00875A]"
                 />
-                <span className="text-xs text-amber-950 leading-relaxed">
-                  <strong className="inline-flex items-center gap-1">
-                    <Lock className="w-3.5 h-3.5" />
-                    Aviso de privacidad para citas de terceros:
-                  </strong>{" "}
-                  Confirmo contar con autorización del beneficiario para gestionar esta cita. Su
-                  expediente clínico y CURP quedarán resguardados de forma independiente y mi cuenta
-                  únicamente mostrará el estatus operativo de esta solicitud. *
-                </span>
-              </label>
-            )}
+              </div>
 
-            <p className="text-[14px] text-[#4B5563] mt-3">* Estos campos son obligatorios.</p>
+              {forThirdParty && (
+                <label className="block border-t border-b border-[#E4E7EB] py-4 cursor-pointer">
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={thirdPartyConsent}
+                      onChange={(e) => setThirdPartyConsent(e.target.checked)}
+                      className="mt-1 w-4 h-4 accent-[#00875A]"
+                    />
+                    <p className="text-xs text-[#52606D] leading-relaxed">
+                      <strong className="text-[#1F2933]">
+                        Aviso de privacidad para citas de terceros:
+                      </strong>{" "}
+                      Confirmo contar con autorización del beneficiario para gestionar esta cita. Su
+                      expediente clínico y CURP quedarán resguardados de forma independiente. *
+                    </p>
+                  </div>
+                </label>
+              )}
+            </div>
 
-            <div className="mt-6 flex justify-end">
+            <div className="pt-4 border-t border-[#E4E7EB] flex items-center justify-between gap-4">
+              <p className="text-xs text-[#52606D]">* Campos obligatorios</p>
               <button
                 type="submit"
                 disabled={!isProfileValid || submitting}
-                className={`min-w-[240px] h-12 px-8 rounded-md font-semibold text-[15px] text-white transition ${
-                  isProfileValid && !submitting
-                    ? "bg-[#00843D] hover:bg-[#006E32] shadow-sm cursor-pointer"
-                    : "bg-[#A1A8B0] cursor-not-allowed"
-                }`}
+                className="h-12 px-8 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {submitting ? "Guardando..." : "Continuar"}
               </button>
@@ -1125,137 +1171,126 @@ export const LaboratorioPage: React.FC = () => {
         </div>
       )}
 
-      {/* ==================== PASO 3: RESUMEN, PAGO, CONFIRMACIÓN Y GUARDADO ==================== */}
+      {/* ==================== PASO 3: RESUMEN, PAGO Y CONFIRMACIÓN ==================== */}
       {step === 3 && activeCase && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-7 space-y-5">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
+          <div className="lg:col-span-7 space-y-6">
             {confirmedFolio ? (
-              <div className="bg-emerald-50 border border-emerald-300 rounded-2xl p-6 space-y-5">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase text-[#00843D]">
-                      <CheckCircle2 className="w-4 h-4" />
-                      ¡Cita confirmada con éxito!
-                    </div>
-                    <h2 className="text-2xl font-extrabold font-mono text-[#005A2B]">
+              <section className="space-y-6 border-l-2 border-[#00875A] pl-6 py-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
+                      Cita confirmada
+                    </p>
+                    <h2 className="text-3xl font-bold font-mono text-[#1F2933]">
                       {confirmedFolio.folio}
                     </h2>
-                    <p className="text-xs text-slate-600">
+                    <p className="text-sm text-[#52606D]">
                       Presenta este folio o código QR en recepción. También enviamos tu confirmación
-                      a WhatsApp.
+                      por WhatsApp.
                     </p>
                   </div>
-                  <div className="p-3 bg-white rounded-xl border border-emerald-200 shadow-sm shrink-0 self-start">
-                    <QrCode className="w-16 h-16 text-[#005A2B]" />
+                  <div className="p-3 border border-[#E4E7EB] self-start shrink-0">
+                    <QrCode className="w-16 h-16 text-[#1F2933]" />
                   </div>
                 </div>
 
-                <div className="flex flex-wrap gap-3">
+                <div className="flex flex-wrap items-center gap-4 pt-2">
                   <Link
                     to="/mi-cuenta"
-                    className="inline-flex items-center gap-2 bg-[#00843D] hover:bg-[#006E32] text-white font-bold px-5 py-3 rounded-xl text-sm shadow-sm transition"
+                    className="inline-flex items-center justify-center h-12 px-6 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] text-sm font-semibold transition-colors"
                   >
-                    Ver en Mis Citas
-                    <ArrowRight className="w-4 h-4" />
+                    Ver en mis citas
                   </Link>
                   <Link
                     to="/"
-                    className="inline-flex items-center gap-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 font-semibold px-4 py-3 rounded-xl text-sm transition"
+                    className="text-sm font-semibold text-[#00875A] hover:underline"
                   >
                     Volver al inicio
                   </Link>
                 </div>
-              </div>
+              </section>
             ) : savedForLater ? (
-              <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 space-y-4">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-emerald-100 text-[#00843D] flex items-center justify-center shrink-0">
-                    <BookmarkCheck className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-extrabold text-slate-900">
-                      Guardamos tu cotización para continuar después
-                    </h2>
-                    <p className="text-sm text-slate-700 mt-1 leading-relaxed">
-                      Conservamos tu estudio (
-                      <strong>{activeCase.contextJson.study?.name}</strong>), clínica (
-                      <strong>{activeCase.contextJson.clinic?.name}</strong>) y tus datos. Podrás
-                      retomar y concluir tu cita en cualquier momento desde{" "}
-                      <strong>Mi Cuenta</strong>, por <strong>WhatsApp</strong> o llamando a nuestro{" "}
-                      <strong>Call Center</strong> sin volver a llenar ningún formulario.
-                    </p>
-                  </div>
+              <section className="space-y-6 border-l-2 border-[#00875A] pl-6 py-2">
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
+                    Borrador guardado
+                  </p>
+                  <h2 className="text-2xl font-bold text-[#1F2933]">
+                    Guardamos tu cotización para continuar después
+                  </h2>
+                  <p className="text-sm text-[#52606D] leading-relaxed">
+                    Conservamos tu estudio (
+                    <strong className="text-[#1F2933]">{activeCase.contextJson.study?.name}</strong>),
+                    clínica (
+                    <strong className="text-[#1F2933]">{activeCase.contextJson.clinic?.name}</strong>
+                    ) y tus datos. Podrás retomar y concluir tu cita desde Mi cuenta, WhatsApp o
+                    Call Center sin volver a llenar formularios.
+                  </p>
                 </div>
 
-                <div className="flex flex-wrap gap-3 pt-2">
+                <div className="flex flex-wrap items-center gap-4">
                   <Link
                     to={loggedPatient ? "/mi-cuenta" : "/registro"}
-                    className="inline-flex items-center gap-2 bg-[#00843D] hover:bg-[#006E32] text-white font-bold px-5 py-3 rounded-xl text-sm shadow-sm transition"
+                    className="inline-flex items-center justify-center h-12 px-6 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] text-sm font-semibold transition-colors"
                   >
-                    {loggedPatient ? "Ir a Mis Citas" : "Crear cuenta para ver mis citas"}
-                    <ArrowRight className="w-4 h-4" />
+                    {loggedPatient ? "Ir a mis citas" : "Crear cuenta para ver mis citas"}
                   </Link>
                   <Link
                     to="/"
-                    className="inline-flex items-center gap-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 font-semibold px-4 py-3 rounded-xl text-sm transition"
+                    className="text-sm font-semibold text-[#00875A] hover:underline"
                   >
                     Volver al inicio
                   </Link>
                 </div>
-              </div>
+              </section>
             ) : (
-              <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
-                <div className="flex items-center gap-2 text-[#00843D] text-sm font-bold">
-                  <CheckCircle2 className="w-5 h-5" />
-                  Pre-registro sincronizado en todos tus canales
-                </div>
-
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900">Elige tu forma de pago</h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
+              <section className="space-y-6">
+                <div className="pb-4 border-b border-[#E4E7EB]">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
+                    Pre-registro sincronizado en todos tus canales
+                  </p>
+                  <h2 className="text-xl font-bold text-[#1F2933] mt-1">Elige tu forma de pago</h2>
+                  <p className="text-sm text-[#52606D] mt-1">
                     Al pagar en línea obtienes 10% de descuento y recepción preferencial en clínica.
                   </p>
                 </div>
 
-                <div className="space-y-3">
-                  <PaymentOptionCard
+                <ul className="divide-y divide-[#E4E7EB] border-b border-[#E4E7EB]">
+                  <PaymentOptionRow
                     selected={paymentMethod === "online"}
                     onSelect={() => setPaymentMethod("online")}
                     title="Pago en línea con tarjeta (Visa / Mastercard)"
                     subtitle="Aplica 10% de descuento automático y recepción express en clínica"
-                    badge="-10% ahorro"
-                    icon={<CreditCard className="w-5 h-5 text-[#00843D]" />}
+                    note="-10% ahorro"
                   />
-                  <PaymentOptionCard
+                  <PaymentOptionRow
                     selected={paymentMethod === "oxxo"}
                     onSelect={() => setPaymentMethod("oxxo")}
                     title="Pago en efectivo con OXXO Pay"
                     subtitle="Genera una referencia para pagar en tiendas OXXO antes de tu cita"
-                    icon={<Store className="w-5 h-5 text-[#0066B3]" />}
                   />
-                  <PaymentOptionCard
+                  <PaymentOptionRow
                     selected={paymentMethod === "clinic"}
                     onSelect={() => setPaymentMethod("clinic")}
                     title="Pagar en clínica el día de tu cita"
                     subtitle="Efectivo o tarjeta directamente en recepción de Salud Digna"
-                    icon={<Building2 className="w-5 h-5 text-slate-600" />}
                   />
-                </div>
+                </ul>
 
                 {submitError && (
-                  <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs">
+                  <p className="border-l-2 border-[#B42318] pl-4 py-1 text-sm text-[#B42318]">
                     {submitError}
-                  </div>
+                  </p>
                 )}
 
-                <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
                   <button
                     type="button"
                     disabled={savingLater || confirming}
                     onClick={handleSaveForLater}
-                    className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-sm transition disabled:opacity-60"
+                    className="h-12 px-5 border border-[#E4E7EB] bg-[#FFFFFF] hover:border-[#1F2933] text-sm font-semibold text-[#1F2933] transition-colors disabled:opacity-50"
                   >
-                    <BookmarkCheck className="w-4 h-4 text-[#0066B3]" />
                     {savingLater ? "Guardando avance..." : "Guardar y continuar después"}
                   </button>
 
@@ -1263,160 +1298,127 @@ export const LaboratorioPage: React.FC = () => {
                     type="button"
                     disabled={confirming || savingLater}
                     onClick={handleConfirmOnline}
-                    className="inline-flex items-center justify-center gap-2 bg-[#00843D] hover:bg-[#006E32] text-white font-bold px-6 py-3 rounded-xl text-sm shadow-sm transition disabled:opacity-60"
+                    className="h-12 px-7 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] text-sm font-semibold transition-colors disabled:opacity-50"
                   >
                     {confirming
                       ? "Confirmando cita..."
                       : `Confirmar cita (${formatMoney(finalPrice)})`}
-                    <ArrowRight className="w-4 h-4" />
                   </button>
                 </div>
-              </div>
+              </section>
             )}
           </div>
 
-          <div className="lg:col-span-5">
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
-              <h3 className="text-base font-bold text-slate-900 border-b border-slate-100 pb-3">
-                Resumen de tu cita
-              </h3>
+          <aside className="lg:col-span-5 lg:border-l lg:border-[#E4E7EB] lg:pl-8 space-y-5">
+            <h3 className="text-lg font-bold text-[#1F2933] pb-3 border-b border-[#E4E7EB]">
+              Resumen de tu cita
+            </h3>
 
-              <div className="space-y-2.5 text-sm">
-                <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">Paciente</span>
-                  <span className="font-bold text-slate-900 text-right">
-                    {[nombres, apellidoPaterno, apellidoMaterno].filter(Boolean).join(" ") ||
-                      activeCase.contextJson.handoff_summary?.split(" ")[0] ||
-                      "Paciente"}
-                  </span>
+            <dl className="divide-y divide-[#E4E7EB] text-sm">
+              <div className="py-3 flex justify-between gap-4">
+                <dt className="text-[#52606D]">Paciente</dt>
+                <dd className="font-semibold text-[#1F2933] text-right">
+                  {[nombres, apellidoPaterno, apellidoMaterno].filter(Boolean).join(" ") ||
+                    activeCase.contextJson.handoff_summary?.split(" ")[0] ||
+                    "Paciente"}
+                </dd>
+              </div>
+              {forThirdParty && (
+                <div className="py-3 flex justify-between gap-4">
+                  <dt className="text-[#52606D]">Parentesco</dt>
+                  <dd className="font-semibold text-[#1F2933]">
+                    {RELATIONSHIP_OPTIONS.find((r) => r.value === relationship)?.label}
+                  </dd>
                 </div>
-                {forThirdParty && (
-                  <div className="flex justify-between gap-2">
-                    <span className="text-slate-500">Parentesco</span>
-                    <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 text-xs font-bold">
-                      {RELATIONSHIP_OPTIONS.find((r) => r.value === relationship)?.label}
-                    </span>
-                  </div>
-                )}
-                {curp && (
-                  <div className="flex justify-between gap-2">
-                    <span className="text-slate-500">CURP</span>
-                    <span className="font-mono text-xs font-semibold text-slate-800">{curp}</span>
-                  </div>
-                )}
-                <div className="flex justify-between gap-2 pt-2 border-t border-slate-100">
-                  <span className="text-slate-500">Estudio</span>
-                  <span className="font-semibold text-slate-900 text-right">
-                    {activeCase.contextJson.study?.name}
-                  </span>
+              )}
+              {curp && (
+                <div className="py-3 flex justify-between gap-4">
+                  <dt className="text-[#52606D]">CURP</dt>
+                  <dd className="font-mono text-xs font-semibold text-[#1F2933]">{curp}</dd>
                 </div>
-                <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">Clínica</span>
-                  <span className="font-semibold text-slate-900 text-right">
-                    {activeCase.contextJson.clinic?.name}
-                  </span>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">Horario</span>
-                  <span className="font-semibold text-slate-900">
+              )}
+              <div className="py-3 flex justify-between gap-4">
+                <dt className="text-[#52606D]">Estudio</dt>
+                <dd className="font-semibold text-[#1F2933] text-right">
+                  {activeCase.contextJson.study?.name}
+                </dd>
+              </div>
+              <div className="py-3 flex justify-between gap-4">
+                <dt className="text-[#52606D]">Clínica</dt>
+                <dd className="font-semibold text-[#1F2933] text-right">
+                  {activeCase.contextJson.clinic?.name}
+                </dd>
+              </div>
+              <div className="py-3 flex justify-between gap-4">
+                <dt className="text-[#52606D]">Horario</dt>
+                <dd className="font-semibold text-[#1F2933]">
+                  <time dateTime={`${preferredDate}T${preferredTime}`}>
                     {preferredDate} · {preferredTime} hrs
-                  </span>
-                </div>
+                  </time>
+                </dd>
               </div>
+            </dl>
 
-              <div className="pt-3 border-t border-slate-200 space-y-1.5 text-sm">
-                <div className="flex justify-between text-slate-500">
-                  <span>Subtotal</span>
-                  <span>{formatMoney(basePrice)}</span>
-                </div>
-                {paymentMethod === "online" && (
-                  <div className="flex justify-between text-[#00843D] font-medium">
-                    <span>Descuento pago en línea (10%)</span>
-                    <span>-{formatMoney(onlineDiscount)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between text-lg font-extrabold text-slate-900 pt-1">
-                  <span>Total a pagar</span>
-                  <span className="text-[#00843D]">{formatMoney(finalPrice)}</span>
-                </div>
+            <dl className="pt-4 border-t border-[#E4E7EB] space-y-2 text-sm">
+              <div className="flex justify-between text-[#52606D]">
+                <dt>Subtotal</dt>
+                <dd>{formatMoney(basePrice)}</dd>
               </div>
-            </div>
-          </div>
+              {paymentMethod === "online" && (
+                <div className="flex justify-between text-[#00875A] font-medium">
+                  <dt>Descuento pago en línea (10%)</dt>
+                  <dd>-{formatMoney(onlineDiscount)}</dd>
+                </div>
+              )}
+              <div className="flex justify-between items-baseline pt-3 border-t border-[#E4E7EB]">
+                <dt className="text-base font-bold text-[#1F2933]">Total a pagar</dt>
+                <dd>
+                  <strong className="text-2xl font-bold text-[#1F2933]">
+                    {formatMoney(finalPrice)}
+                  </strong>
+                </dd>
+              </div>
+            </dl>
+          </aside>
         </div>
       )}
     </div>
   );
 };
 
-const FemaleIcon: React.FC<{ className?: string }> = ({ className }) => (
-  <svg
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.6"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    className={className}
-  >
-    <circle cx="12" cy="5.5" r="2.2" />
-    <path d="M9.5 10.5c0-1 .8-1.8 1.8-1.8h1.4c1 0 1.8.8 1.8 1.8l1.3 5.5H8.2l1.3-5.5Z" />
-    <path d="M10.5 16v4.5M13.5 16v4.5" />
-  </svg>
-);
-
-const MaleIcon: React.FC<{ className?: string }> = ({ className }) => (
-  <svg
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.6"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    className={className}
-  >
-    <circle cx="12" cy="5.5" r="2.2" />
-    <path d="M9.5 10.5c0-1 .8-1.8 1.8-1.8h1.4c1 0 1.8.8 1.8 1.8v5h-5v-5Z" />
-    <path d="M10.5 15.5v5M13.5 15.5v5" />
-  </svg>
-);
-
-interface PaymentOptionCardProps {
+interface PaymentOptionRowProps {
   selected: boolean;
   onSelect: () => void;
   title: string;
   subtitle: string;
-  badge?: string;
-  icon: React.ReactNode;
+  note?: string;
 }
 
-const PaymentOptionCard: React.FC<PaymentOptionCardProps> = ({
+const PaymentOptionRow: React.FC<PaymentOptionRowProps> = ({
   selected,
   onSelect,
   title,
   subtitle,
-  badge,
-  icon,
+  note,
 }) => (
-  <button
-    type="button"
-    onClick={onSelect}
-    className={`w-full text-left p-4 rounded-xl border transition flex items-start gap-3.5 ${
-      selected
-        ? "border-[#00843D] bg-[#E6F4EC]/50 ring-1 ring-[#00843D]"
-        : "border-slate-200 hover:border-slate-300 bg-white"
-    }`}
-  >
-    <div className="p-2 rounded-lg bg-slate-50 border border-slate-100 shrink-0">{icon}</div>
-    <div className="flex-1 min-w-0">
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-bold text-sm text-slate-900">{title}</span>
-        {badge && (
-          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#00843D] text-white shrink-0">
-            {badge}
-          </span>
-        )}
+  <li className={`border-l-2 ${selected ? "border-[#00875A]" : "border-transparent"}`}>
+    <button
+      type="button"
+      onClick={onSelect}
+      className="w-full text-left py-4 pl-4 pr-2 flex items-start justify-between gap-4 hover:bg-[#F7F8F9] transition-colors"
+    >
+      <div>
+        <strong className={`block text-sm font-semibold ${selected ? "text-[#00875A]" : "text-[#1F2933]"}`}>
+          {title}
+        </strong>
+        <p className="text-xs text-[#52606D] mt-1">{subtitle}</p>
       </div>
-      <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>
-    </div>
-  </button>
+      <div className="text-right shrink-0">
+        {note && <strong className="block text-xs font-semibold text-[#00875A]">{note}</strong>}
+        <small className={`block text-xs mt-0.5 ${selected ? "text-[#00875A] font-semibold" : "text-[#52606D]"}`}>
+          {selected ? "Seleccionado" : "Elegir"}
+        </small>
+      </div>
+    </button>
+  </li>
 );

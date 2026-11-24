@@ -1,23 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import {
-  AlertCircle,
-  ArrowRight,
-  CalendarCheck,
-  CheckCircle2,
-  Clock,
-  FlaskConical,
-  Lock,
-  Mail,
-  MapPin,
-  Phone,
-  Plus,
-  QrCode,
-  Radio,
-  RefreshCw,
-  User,
-  Users,
-} from "lucide-react";
+import { QrCode } from "lucide-react";
 import { OrderJourneyTracker } from "../components/OrderJourneyTracker";
 import {
   api,
@@ -71,7 +54,6 @@ export const PatientAccountPage: React.FC = () => {
     loadAccount();
   }, [loadAccount]);
 
-  // Stream SSE en tiempo real para actualizar la barra tipo Amazon/Mercado Libre al instante
   useEffect(() => {
     if (!token) return;
     const es = new EventSource(
@@ -99,8 +81,8 @@ export const PatientAccountPage: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="max-w-5xl mx-auto px-4 py-16 text-center text-sm text-slate-500">
-        Cargando tu expediente de paciente...
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-sm text-[#52606D]">
+        Cargando expediente del paciente...
       </div>
     );
   }
@@ -110,195 +92,152 @@ export const PatientAccountPage: React.FC = () => {
     .join(" ");
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-      {/* Cabecera de Cuenta */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-start gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-[#E6F4EC] text-[#00843D] flex items-center justify-center shrink-0">
-            <User className="w-7 h-7" />
-          </div>
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-[#00843D]">
-                Mi Cuenta Salud Digna
-              </span>
-              <span
-                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${
-                  sseLive
-                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                    : "bg-slate-50 text-slate-500 border-slate-200"
-                }`}
-              >
-                <Radio className={`w-3 h-3 ${sseLive ? "animate-pulse" : ""}`} />
-                {sseLive ? "Seguimiento en tiempo real" : "Sincronizando"}
-              </span>
-            </div>
-            <h1 className="text-2xl font-extrabold text-slate-900 mt-0.5">
-              {fullName || "Paciente Salud Digna"}
-            </h1>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 mt-1.5">
-              {profile?.email && (
-                <span className="inline-flex items-center gap-1">
-                  <Mail className="w-3.5 h-3.5" />
-                  {profile.email}
-                </span>
-              )}
-              {profile?.telefono && (
-                <span className="inline-flex items-center gap-1 font-mono">
-                  <Phone className="w-3.5 h-3.5" />
-                  {profile.telefono}
-                </span>
-              )}
-              {profile?.curp && (
-                <span className="font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-700">
-                  CURP: {profile.curp}
-                </span>
-              )}
-            </div>
-          </div>
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-12 bg-[#FFFFFF] text-[#1F2933]">
+      {/* Cabecera de cuenta abierta con divisor inferior */}
+      <header className="pb-8 border-b border-[#E4E7EB] flex flex-col md:flex-row md:items-end justify-between gap-6">
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
+            Mi cuenta · {sseLive ? "Seguimiento en tiempo real activo" : "Sincronizando"}
+          </p>
+          <h1 className="text-3xl font-bold text-[#1F2933]">
+            {fullName || "Paciente Salud Digna"}
+          </h1>
+          <dl className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-[#52606D] pt-1">
+            {profile?.email && (
+              <div className="flex gap-1.5">
+                <dt className="font-semibold text-[#1F2933]">Correo:</dt>
+                <dd>{profile.email}</dd>
+              </div>
+            )}
+            {profile?.telefono && (
+              <div className="flex gap-1.5">
+                <dt className="font-semibold text-[#1F2933]">Teléfono:</dt>
+                <dd className="font-mono">{profile.telefono}</dd>
+              </div>
+            )}
+            {profile?.curp && (
+              <div className="flex gap-1.5">
+                <dt className="font-semibold text-[#1F2933]">CURP:</dt>
+                <dd className="font-mono">{profile.curp}</dd>
+              </div>
+            )}
+          </dl>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-4 shrink-0">
           <button
             type="button"
             onClick={loadAccount}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-semibold transition"
+            className="h-11 px-4 border border-[#E4E7EB] text-sm font-semibold text-[#1F2933] hover:border-[#1F2933] transition-colors"
           >
-            <RefreshCw className="w-4 h-4" />
             Actualizar
           </button>
           <Link
             to="/laboratorio"
-            className="inline-flex items-center gap-2 bg-[#00843D] hover:bg-[#006E32] text-white font-bold px-5 py-2.5 rounded-xl text-sm shadow-sm transition"
+            className="inline-flex items-center justify-center h-11 px-6 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] text-sm font-semibold transition-colors"
           >
-            <Plus className="w-4 h-4" />
             Solicitar estudio
           </Link>
         </div>
-      </div>
+      </header>
 
-      {/* Familiares / Beneficiarios vinculados con privacidad clínica */}
+      {/* Familiares y beneficiarios en lista vertical */}
       {beneficiaries.length > 0 && (
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
-              <Users className="w-4 h-4 text-[#0066B3]" />
+        <section className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 pb-3 border-b border-[#E4E7EB]">
+            <h2 className="text-lg font-bold text-[#1F2933]">
               Familiares y conocidos registrados ({beneficiaries.length})
             </h2>
-            <span className="text-[11px] text-slate-500 inline-flex items-center gap-1">
-              <Lock className="w-3 h-3 text-[#00843D]" />
+            <p className="text-xs text-[#52606D]">
               Cada beneficiario conserva su expediente clínico independiente
-            </span>
+            </p>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <ul className="divide-y divide-[#E4E7EB] border-b border-[#E4E7EB]">
             {beneficiaries.map((b) => (
-              <div
+              <li
                 key={b.relationshipId}
-                className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between gap-3"
+                className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
               >
-                <div className="min-w-0">
-                  <div className="text-xs font-bold text-slate-900 truncate">
+                <div>
+                  <strong className="block text-sm font-semibold text-[#1F2933]">
                     {[b.nombres, b.apellido_paterno].filter(Boolean).join(" ")}
-                  </div>
-                  <div className="text-[11px] text-slate-500">
+                  </strong>
+                  <p className="text-xs text-[#52606D] mt-0.5">
                     {b.relationshipLabel} ·{" "}
-                    <span className="font-mono">{b.curpMasked || "CURP protegida"}</span>
-                  </div>
+                    <code className="font-mono">{b.curpMasked || "CURP protegida"}</code>
+                  </p>
                 </div>
                 <Link
                   to={`/laboratorio?forBeneficiary=${encodeURIComponent(b.beneficiaryId)}`}
-                  className="shrink-0 px-2.5 py-1.5 rounded-lg bg-[#E6F4EC] hover:bg-[#d7eee0] text-[#005A2B] text-[11px] font-bold transition"
+                  className="text-sm font-semibold text-[#00875A] hover:underline shrink-0"
                 >
-                  Agendar
+                  Agendar estudio →
                 </Link>
-              </div>
+              </li>
             ))}
-          </div>
-        </div>
+          </ul>
+        </section>
       )}
 
       {error && (
-        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{error}</span>
-        </div>
+        <p className="border-l-2 border-[#B42318] pl-4 py-1 text-sm text-[#B42318]">{error}</p>
       )}
 
-      {/* Lista de Citas con Rastreo en Vivo estilo Amazon / Mercado Libre */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-extrabold text-slate-900 flex items-center gap-2">
-            <CalendarCheck className="w-5 h-5 text-[#00843D]" />
-            Seguimiento de Mis Citas y Trámites ({cases.length})
-          </h2>
-        </div>
+      {/* Seguimiento de citas y trámites */}
+      <section className="space-y-6">
+        <h2 className="text-xl font-bold text-[#1F2933] pb-3 border-b border-[#E4E7EB]">
+          Seguimiento de mis citas y trámites ({cases.length})
+        </h2>
 
         {cases.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center space-y-4">
-            <div className="w-14 h-14 rounded-2xl bg-[#E6F4EC] text-[#00843D] mx-auto flex items-center justify-center">
-              <FlaskConical className="w-7 h-7" />
-            </div>
-            <div>
-              <h3 className="text-base font-bold text-slate-900">
-                Aún no tienes estudios solicitados
-              </h3>
-              <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">
-                Solicita un estudio para ti o para un familiar y da seguimiento en tiempo real desde
-                cualquier canal (Web, WhatsApp o Call Center).
-              </p>
-            </div>
+          <div className="py-12 space-y-4">
+            <h3 className="text-base font-bold text-[#1F2933]">
+              Aún no tienes estudios solicitados
+            </h3>
+            <p className="text-sm text-[#52606D] max-w-lg">
+              Solicita un estudio para ti o para un familiar y da seguimiento en tiempo real desde
+              cualquier canal: sitio web, WhatsApp o Call Center.
+            </p>
             <Link
               to="/laboratorio"
-              className="inline-flex items-center gap-2 bg-[#00843D] hover:bg-[#006E32] text-white font-bold px-6 py-3 rounded-xl text-sm shadow-sm transition"
+              className="inline-block text-sm font-semibold text-[#00875A] hover:underline"
             >
-              Explorar estudios de laboratorio
+              Explorar catálogo de estudios →
             </Link>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-5">
+          <ul className="divide-y divide-[#E4E7EB] border-b border-[#E4E7EB]">
             {cases.map((c) => {
               const isConfirmed =
                 c.currentState === "CITA_CONFIRMADA" && Boolean(c.contextJson.appointment_folio);
 
               return (
-                <div
-                  key={c.id}
-                  className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm space-y-4"
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                <li key={c.id} className="py-8 space-y-6">
+                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                     <div>
-                      <h3 className="text-lg font-extrabold text-slate-900">
+                      <h3 className="text-xl font-bold text-[#1F2933]">
                         {c.contextJson.study?.name || "Solicitud de estudio en proceso"}
                       </h3>
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 mt-1">
-                        {c.contextJson.clinic && (
-                          <span className="inline-flex items-center gap-1">
-                            <MapPin className="w-3.5 h-3.5 text-[#00843D]" />
-                            {c.contextJson.clinic.name}
-                          </span>
-                        )}
-                        {c.contextJson.preferred_slot && (
-                          <span className="inline-flex items-center gap-1">
-                            <Clock className="w-3.5 h-3.5 text-[#0066B3]" />
-                            {c.contextJson.preferred_slot.date} ·{" "}
-                            {c.contextJson.preferred_slot.time} hrs
-                          </span>
-                        )}
-                        <span>Actualizado: {formatDateTime(c.updatedAt)}</span>
-                      </div>
+                      <p className="text-xs text-[#52606D] mt-1">
+                        {c.contextJson.clinic ? `${c.contextJson.clinic.name} · ` : ""}
+                        {c.contextJson.preferred_slot
+                          ? `${c.contextJson.preferred_slot.date} a las ${c.contextJson.preferred_slot.time} hrs · `
+                          : ""}
+                        Actualizado:{" "}
+                        <time dateTime={c.updatedAt}>{formatDateTime(c.updatedAt)}</time>
+                      </p>
                     </div>
 
                     {c.contextJson.study?.price && (
-                      <div className="text-left sm:text-right shrink-0">
-                        <div className="text-xs text-slate-400">Precio de lista</div>
-                        <div className="text-xl font-extrabold text-[#00843D]">
+                      <div className="sm:text-right shrink-0">
+                        <small className="block text-xs text-[#52606D]">Precio de lista</small>
+                        <strong className="text-xl font-bold text-[#1F2933]">
                           {formatMoney(c.contextJson.study.price)}
-                        </div>
+                        </strong>
                       </div>
                     )}
                   </div>
 
-                  {/* Barra de progreso + historial estilo Amazon / Mercado Libre */}
                   <OrderJourneyTracker
                     currentState={c.currentState}
                     currentChannel={c.currentChannel}
@@ -310,61 +249,58 @@ export const PatientAccountPage: React.FC = () => {
                   />
 
                   {c.privacyNotice && (
-                    <div className="px-3.5 py-2 rounded-xl bg-amber-50 border border-amber-200/80 text-[11px] text-amber-900 flex items-center gap-2">
-                      <Lock className="w-3.5 h-3.5 shrink-0" />
-                      <span>{c.privacyNotice}</span>
-                    </div>
+                    <p className="border-l-2 border-[#E4E7EB] pl-4 text-xs text-[#52606D]">
+                      {c.privacyNotice}
+                    </p>
                   )}
 
                   {c.contextJson.study?.prep && (
-                    <div className="p-3.5 rounded-xl bg-[#EBF4FC] text-[#005291] text-xs leading-relaxed">
-                      <strong>Preparación para el estudio:</strong> {c.contextJson.study.prep}
-                    </div>
+                    <p className="text-xs text-[#52606D] leading-relaxed">
+                      <strong className="text-[#1F2933]">Preparación para el estudio:</strong>{" "}
+                      {c.contextJson.study.prep}
+                    </p>
                   )}
 
                   {isConfirmed ? (
-                    <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="border-l-2 border-[#00875A] pl-5 py-1 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div>
-                        <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase text-[#00843D]">
-                          <CheckCircle2 className="w-4 h-4" />
+                        <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
                           Cita confirmada · Presentar en recepción
-                        </div>
-                        <div className="text-2xl font-extrabold font-mono text-[#005A2B] mt-0.5">
+                        </p>
+                        <strong className="block text-2xl font-bold font-mono text-[#1F2933] mt-1">
                           {c.contextJson.appointment_folio}
-                        </div>
-                        <div className="text-[11px] font-mono text-slate-500 mt-0.5">
+                        </strong>
+                        <code className="block text-xs font-mono text-[#52606D] mt-0.5">
                           {c.contextJson.qr_payload}
-                        </div>
+                        </code>
                       </div>
-                      <div className="p-2.5 bg-white rounded-xl border border-emerald-200 self-start sm:self-center">
-                        <QrCode className="w-14 h-14 text-[#005A2B]" />
+                      <div className="p-2 border border-[#E4E7EB] self-start sm:self-center">
+                        <QrCode className="w-14 h-14 text-[#1F2933]" />
                       </div>
                     </div>
                   ) : (
-                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100 text-xs text-slate-500">
-                      <span>
-                        Retoma exactamente donde te quedaste sin importar en qué canal iniciaste o
-                        cuántas veces cambiaste de canal.
-                      </span>
+                    <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
+                      <p className="text-xs text-[#52606D]">
+                        Retoma exactamente donde te quedaste sin importar en qué canal iniciaste.
+                      </p>
                       <button
                         type="button"
                         disabled={resumingId === c.id}
                         onClick={() => handleResumeCase(c.id)}
-                        className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#0066B3] hover:bg-[#005291] text-white font-bold transition disabled:opacity-60"
+                        className="px-4 py-2 border border-[#00875A] text-xs font-semibold text-[#00875A] hover:bg-[#00875A] hover:text-[#FFFFFF] transition-colors disabled:opacity-50"
                       >
                         {resumingId === c.id
                           ? "Cargando contexto..."
-                          : "Retomar solicitud aquí"}
-                        <ArrowRight className="w-3.5 h-3.5" />
+                          : "Retomar solicitud aquí →"}
                       </button>
                     </div>
                   )}
-                </div>
+                </li>
               );
             })}
-          </div>
+          </ul>
         )}
-      </div>
+      </section>
     </div>
   );
 };

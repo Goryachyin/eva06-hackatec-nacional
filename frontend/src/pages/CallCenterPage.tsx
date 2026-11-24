@@ -1,16 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  AlertTriangle,
-  ArrowRight,
-  BellRing,
-  CheckCircle2,
-  Clock,
-  Lock,
-  PhoneCall,
-  QrCode,
-  RefreshCw,
-  UserCheck,
-} from "lucide-react";
+import { QrCode } from "lucide-react";
 import { CallCenterLayout } from "../components/layouts/CallCenterLayout";
 import {
   api,
@@ -176,59 +165,66 @@ export const CallCenterPage: React.FC = () => {
   if (!token) {
     return (
       <CallCenterLayout user={null} sseConnected={false}>
-        <div className="max-w-md mx-auto px-4 py-16">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-lg overflow-hidden">
-            <div className="bg-gradient-to-r from-[#0F172A] to-[#0066B3] px-6 py-6 text-white">
-              <div className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider bg-white/15 px-2.5 py-1 rounded-full mb-3">
-                <Lock className="w-3.5 h-3.5" />
-                Acceso Operativo · Call Center
-              </div>
-              <h1 className="text-xl font-extrabold">Estación de Asesores</h1>
-              <p className="text-blue-100 text-xs mt-1">
-                Inicia sesión con tu cuenta institucional de asesor para atender pacientes con
-                contexto omnicanal.
-              </p>
-            </div>
+        <div className="max-w-md mx-auto px-4 py-16 space-y-8">
+          <header className="pb-6 border-b border-[#E4E7EB] space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
+              Acceso operativo · Call Center
+            </p>
+            <h1 className="text-3xl font-bold text-[#1F2933]">Estación de asesores</h1>
+            <p className="text-sm text-[#52606D]">
+              Inicia sesión con tu cuenta institucional de asesor para atender pacientes con
+              contexto omnicanal.
+            </p>
+          </header>
 
-            <form onSubmit={handleLogin} className="p-6 space-y-4">
-              {loginError && (
-                <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs">
-                  {loginError}
-                </div>
-              )}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Correo institucional
-                </label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="asesor@saluddigna.demo"
-                  required
-                  className="w-full h-11 rounded-lg border border-slate-300 px-3.5 text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">Contraseña</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  required
-                  className="w-full h-11 rounded-lg border border-slate-300 px-3.5 text-sm"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={loginLoading}
-                className="w-full h-11 bg-[#0066B3] hover:bg-[#005291] text-white font-bold rounded-lg text-sm transition"
+          <form onSubmit={handleLogin} className="space-y-6">
+            {loginError && (
+              <p className="border-l-2 border-[#B42318] pl-4 py-1 text-sm text-[#B42318]">
+                {loginError}
+              </p>
+            )}
+            <div>
+              <label
+                htmlFor="cc-email"
+                className="block text-xs font-semibold text-[#1F2933] mb-1.5"
               >
-                {loginLoading ? "Ingresando..." : "Iniciar sesión"}
-              </button>
-            </form>
-          </div>
+                Correo institucional
+              </label>
+              <input
+                id="cc-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="asesor@saluddigna.demo"
+                required
+                className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm text-[#1F2933] focus:border-[#00875A]"
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="cc-pass"
+                className="block text-xs font-semibold text-[#1F2933] mb-1.5"
+              >
+                Contraseña
+              </label>
+              <input
+                id="cc-pass"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                required
+                className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm text-[#1F2933] focus:border-[#00875A]"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loginLoading}
+              className="w-full h-12 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] font-semibold text-sm transition-colors disabled:opacity-50"
+            >
+              {loginLoading ? "Ingresando..." : "Iniciar sesión"}
+            </button>
+          </form>
         </div>
       </CallCenterLayout>
     );
@@ -244,288 +240,275 @@ export const CallCenterPage: React.FC = () => {
         setUser(null);
       }}
     >
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-5">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-6">
         {screenPopNotice && (
-          <div className="p-3.5 rounded-xl bg-[#0066B3] text-white text-sm font-semibold flex items-center gap-2 shadow-md">
-            <BellRing className="w-4 h-4 animate-bounce" />
+          <p className="border-l-2 border-[#00875A] pl-4 py-1 text-sm font-semibold text-[#00875A]">
             {screenPopNotice}
-          </div>
+          </p>
         )}
 
         {error && (
-          <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 shrink-0" />
-            {error}
-          </div>
+          <p className="border-l-2 border-[#B42318] pl-4 py-1 text-sm text-[#B42318]">{error}</p>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-          {/* Cola */}
-          <div className="lg:col-span-4 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col max-h-[700px]">
-            <div className="p-4 border-b border-slate-200 bg-slate-50/70 flex items-center justify-between">
-              <h2 className="text-sm font-bold text-slate-900">Cola de Casos ({cases.length})</h2>
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
+          {/* Cola vertical */}
+          <aside className="lg:col-span-4 space-y-4">
+            <div className="pb-3 border-b border-[#E4E7EB] flex items-center justify-between">
+              <h2 className="text-base font-bold text-[#1F2933]">Cola de casos ({cases.length})</h2>
               <button
                 type="button"
                 onClick={fetchQueue}
-                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600"
-                title="Actualizar bandeja"
+                className="text-xs font-semibold text-[#00875A] hover:underline"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+                {loading ? "Actualizando..." : "Actualizar"}
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-              {cases.length === 0 ? (
-                <div className="p-8 text-center text-xs text-slate-400">
-                  No hay casos activos en cola.
-                </div>
-              ) : (
-                cases.map((c) => {
+            {cases.length === 0 ? (
+              <p className="py-8 text-xs text-[#52606D]">No hay casos activos en cola.</p>
+            ) : (
+              <ul className="divide-y divide-[#E4E7EB] border-b border-[#E4E7EB] max-h-[680px] overflow-y-auto">
+                {cases.map((c) => {
                   const active = c.id === selectedCaseId;
                   const fullName =
                     [c.patient.firstName, c.patient.paternalLastName].filter(Boolean).join(" ") ||
                     "Paciente";
                   const stMeta = STATE_META[c.currentState];
                   return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => setSelectedCaseId(c.id)}
-                      className={`w-full text-left p-4 transition ${
-                        active ? "bg-[#E6F4EC]/70 border-l-4 border-[#00843D]" : "hover:bg-slate-50"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-bold text-sm text-slate-900 truncate">
-                          {fullName}
-                        </span>
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold border shrink-0 ${stMeta.badgeClass}`}
-                        >
-                          {stMeta.shortLabel}
-                        </span>
-                      </div>
-                      <div className="text-xs text-slate-600 mt-1 truncate">
-                        {c.contextJson.study?.name || "Sin estudio aún"}
-                      </div>
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1.5">
-                        <span>{CHANNEL_META[c.currentChannel].label}</span>
-                        <span>v{c.version}</span>
-                      </div>
-                    </button>
+                    <li key={c.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCaseId(c.id)}
+                        className={`w-full text-left py-4 pl-3 pr-2 border-l-2 transition-colors ${
+                          active
+                            ? "border-[#00875A] bg-[#F7F8F9]"
+                            : "border-transparent hover:bg-[#F7F8F9]"
+                        }`}
+                      >
+                        <div className="flex items-baseline justify-between gap-2">
+                          <strong className="text-sm font-semibold text-[#1F2933] truncate">
+                            {fullName}
+                          </strong>
+                          <small className={`text-[11px] font-semibold shrink-0 ${stMeta.textClass}`}>
+                            {stMeta.shortLabel}
+                          </small>
+                        </div>
+                        <p className="text-xs text-[#52606D] mt-1 truncate">
+                          {c.contextJson.study?.name || "Sin estudio aún"}
+                        </p>
+                        <p className="text-[11px] text-[#52606D] mt-1">
+                          {CHANNEL_META[c.currentChannel].label} · v{c.version}
+                        </p>
+                      </button>
+                    </li>
                   );
-                })
-              )}
-            </div>
-          </div>
+                })}
+              </ul>
+            )}
+          </aside>
 
-          {/* Ficha Screen-Pop */}
-          <div className="lg:col-span-8 space-y-5">
+          {/* Ficha Screen-Pop separada por línea vertical */}
+          <section className="lg:col-span-8 lg:border-l lg:border-[#E4E7EB] lg:pl-10 space-y-8">
             {!selectedCase ? (
-              <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-sm text-slate-400">
-                Selecciona un caso de la bandeja para ver el Resumen Handoff y confirmar la cita.
-              </div>
+              <p className="py-12 text-sm text-[#52606D]">
+                Selecciona un caso de la bandeja para ver el resumen handoff y confirmar la cita.
+              </p>
             ) : (
               <>
-                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-5">
-                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-4 border-b border-slate-100">
-                    <div>
-                      <div className="text-xs font-bold uppercase tracking-wider text-[#00843D]">
-                        Ficha de Paciente · Screen-Pop
-                      </div>
-                      <h2 className="text-2xl font-extrabold text-slate-900 mt-0.5">
-                        {[
-                          selectedCase.patient.firstName,
-                          selectedCase.patient.paternalLastName,
-                          selectedCase.patient.maternalLastName,
-                        ]
-                          .filter(Boolean)
-                          .join(" ") || "Paciente sin nombre"}
-                      </h2>
-                      <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 mt-1 font-mono">
-                        {selectedCase.patient.phone && (
-                          <span>Tel: {selectedCase.patient.phone}</span>
-                        )}
-                        {selectedCase.patient.curp && (
-                          <span>CURP: {selectedCase.patient.curp}</span>
-                        )}
-                        <span>v{selectedCase.version}</span>
-                      </div>
-                    </div>
-                    <span
-                      className={`self-start px-3 py-1 rounded-full text-xs font-bold border ${
-                        STATE_META[selectedCase.currentState].badgeClass
-                      }`}
-                    >
-                      {STATE_META[selectedCase.currentState].label}
-                    </span>
-                  </div>
-
-                  <div className="p-4 rounded-xl bg-[#E6F4EC] border border-[#00843D]/30 space-y-1.5">
-                    <div className="text-xs font-bold uppercase tracking-wider text-[#005A2B]">
-                      Resumen Determinístico de Handoff
-                    </div>
-                    <p className="text-sm text-slate-800 leading-relaxed font-medium">
-                      {selectedCase.contextJson.handoff_summary ||
-                        "Contexto inicial registrado. Listo para atención del asesor."}
+                <header className="pb-6 border-b border-[#E4E7EB] flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
+                      Ficha de paciente · Screen-Pop
+                    </p>
+                    <h2 className="text-2xl font-bold text-[#1F2933] mt-1">
+                      {[
+                        selectedCase.patient.firstName,
+                        selectedCase.patient.paternalLastName,
+                        selectedCase.patient.maternalLastName,
+                      ]
+                        .filter(Boolean)
+                        .join(" ") || "Paciente sin nombre"}
+                    </h2>
+                    <p className="text-xs font-mono text-[#52606D] mt-1">
+                      {selectedCase.patient.phone ? `Tel: ${selectedCase.patient.phone} · ` : ""}
+                      {selectedCase.patient.curp ? `CURP: ${selectedCase.patient.curp} · ` : ""}
+                      v{selectedCase.version}
                     </p>
                   </div>
+                  <strong
+                    className={`text-xs font-semibold ${STATE_META[selectedCase.currentState].textClass}`}
+                  >
+                    {STATE_META[selectedCase.currentState].label}
+                  </strong>
+                </header>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                    <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/70">
-                      <div className="text-slate-400 font-semibold">Estudio</div>
-                      <div className="font-bold text-slate-900 mt-0.5">
-                        {selectedCase.contextJson.study?.name || "Por definir"}
-                      </div>
-                      {selectedCase.contextJson.study?.price && (
-                        <div className="text-[#00843D] font-bold mt-0.5">
-                          {formatMoney(selectedCase.contextJson.study.price)}
-                        </div>
-                      )}
-                    </div>
-                    <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/70">
-                      <div className="text-slate-400 font-semibold">Clínica</div>
-                      <div className="font-bold text-slate-900 mt-0.5">
-                        {selectedCase.contextJson.clinic?.name || "Por definir"}
-                      </div>
-                      <div className="text-slate-500 mt-0.5">
-                        {selectedCase.contextJson.clinic?.city || ""}
-                      </div>
-                    </div>
-                    <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/70">
-                      <div className="text-slate-400 font-semibold">Horario solicitado</div>
-                      <div className="font-bold text-slate-900 mt-0.5">
-                        {selectedCase.contextJson.preferred_slot
-                          ? `${selectedCase.contextJson.preferred_slot.date} · ${selectedCase.contextJson.preferred_slot.time}`
-                          : "Sin horario definido"}
-                      </div>
-                    </div>
-                  </div>
-
-                  {selectedCase.currentState === "CITA_CONFIRMADA" &&
-                  selectedCase.contextJson.appointment_folio ? (
-                    <div className="p-5 rounded-2xl bg-emerald-50 border border-emerald-300 flex flex-col sm:flex-row items-center justify-between gap-4">
-                      <div className="space-y-1">
-                        <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase text-[#00843D]">
-                          <CheckCircle2 className="w-4 h-4" />
-                          Cita Confirmada con Éxito
-                        </div>
-                        <div className="text-2xl font-extrabold font-mono text-[#005A2B]">
-                          {selectedCase.contextJson.appointment_folio}
-                        </div>
-                        <div className="text-xs font-mono text-slate-600 break-all">
-                          QR: {selectedCase.contextJson.qr_payload}
-                        </div>
-                      </div>
-                      <div className="p-3 bg-white rounded-xl border border-emerald-200 shadow-sm shrink-0">
-                        <QrCode className="w-16 h-16 text-[#005A2B]" />
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="pt-4 border-t border-slate-100 space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div>
-                          <label className="block text-xs font-semibold text-slate-600 mb-1">
-                            Fecha de cita
-                          </label>
-                          <input
-                            type="date"
-                            value={preferredDate}
-                            onChange={(e) => setPreferredDate(e.target.value)}
-                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-semibold text-slate-600 mb-1">
-                            Hora de cita
-                          </label>
-                          <input
-                            type="text"
-                            value={preferredTime}
-                            onChange={(e) => setPreferredTime(e.target.value)}
-                            placeholder="09:30"
-                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-semibold text-slate-600 mb-1">
-                            Notas del asesor
-                          </label>
-                          <input
-                            type="text"
-                            value={advisorNotes}
-                            onChange={(e) => setAdvisorNotes(e.target.value)}
-                            placeholder="Confirmado con paciente..."
-                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-3">
-                        <button
-                          type="button"
-                          disabled={actionLoading}
-                          onClick={handleAssign}
-                          className="inline-flex items-center gap-2 bg-[#0066B3] hover:bg-[#005291] text-white font-bold px-4 py-2.5 rounded-xl text-sm transition disabled:opacity-50"
-                        >
-                          <PhoneCall className="w-4 h-4" />
-                          Tomar caso
-                        </button>
-
-                        <button
-                          type="button"
-                          disabled={actionLoading}
-                          onClick={handleConfirm}
-                          className="inline-flex items-center gap-2 bg-[#00843D] hover:bg-[#006E32] text-white font-bold px-5 py-2.5 rounded-xl text-sm shadow-sm transition disabled:opacity-50"
-                        >
-                          <UserCheck className="w-4 h-4" />
-                          Confirmar cita (Folio + QR)
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                <div className="border-l-2 border-[#00875A] pl-4 space-y-1">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-[#00875A]">
+                    Resumen determinístico de handoff
+                  </h3>
+                  <p className="text-sm text-[#1F2933] leading-relaxed">
+                    {selectedCase.contextJson.handoff_summary ||
+                      "Contexto inicial registrado. Listo para atención del asesor."}
+                  </p>
                 </div>
 
-                <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-                  <h3 className="text-sm font-bold text-slate-900 mb-4 flex items-center gap-2">
-                    <Clock className="w-4 h-4 text-[#00843D]" />
-                    Historial Cronológico ({selectedCase.journeyEvents.length} eventos)
+                <dl className="grid grid-cols-1 sm:grid-cols-3 border-t border-l border-[#E4E7EB] text-xs">
+                  <div className="p-4 border-r border-b border-[#E4E7EB]">
+                    <dt className="text-[#52606D]">Estudio</dt>
+                    <dd className="font-semibold text-[#1F2933] mt-1">
+                      {selectedCase.contextJson.study?.name || "Por definir"}
+                    </dd>
+                    {selectedCase.contextJson.study?.price && (
+                      <dd className="font-bold text-[#00875A] mt-0.5">
+                        {formatMoney(selectedCase.contextJson.study.price)}
+                      </dd>
+                    )}
+                  </div>
+                  <div className="p-4 border-r border-b border-[#E4E7EB]">
+                    <dt className="text-[#52606D]">Clínica</dt>
+                    <dd className="font-semibold text-[#1F2933] mt-1">
+                      {selectedCase.contextJson.clinic?.name || "Por definir"}
+                    </dd>
+                    <dd className="text-[#52606D] mt-0.5">
+                      {selectedCase.contextJson.clinic?.city || ""}
+                    </dd>
+                  </div>
+                  <div className="p-4 border-r border-b border-[#E4E7EB]">
+                    <dt className="text-[#52606D]">Horario solicitado</dt>
+                    <dd className="font-semibold text-[#1F2933] mt-1">
+                      {selectedCase.contextJson.preferred_slot
+                        ? `${selectedCase.contextJson.preferred_slot.date} · ${selectedCase.contextJson.preferred_slot.time}`
+                        : "Sin horario definido"}
+                    </dd>
+                  </div>
+                </dl>
+
+                {selectedCase.currentState === "CITA_CONFIRMADA" &&
+                selectedCase.contextJson.appointment_folio ? (
+                  <div className="border-l-2 border-[#00875A] pl-5 py-1 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
+                        Cita confirmada con éxito
+                      </p>
+                      <strong className="block text-2xl font-bold font-mono text-[#1F2933]">
+                        {selectedCase.contextJson.appointment_folio}
+                      </strong>
+                      <code className="block text-xs font-mono text-[#52606D] break-all">
+                        QR: {selectedCase.contextJson.qr_payload}
+                      </code>
+                    </div>
+                    <div className="p-2 border border-[#E4E7EB] shrink-0 self-start">
+                      <QrCode className="w-14 h-14 text-[#1F2933]" />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="pt-6 border-t border-[#E4E7EB] space-y-5">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div>
+                        <label
+                          htmlFor="cc-date"
+                          className="block text-xs font-semibold text-[#1F2933] mb-1.5"
+                        >
+                          Fecha de cita
+                        </label>
+                        <input
+                          id="cc-date"
+                          type="date"
+                          value={preferredDate}
+                          onChange={(e) => setPreferredDate(e.target.value)}
+                          className="w-full h-10 border border-[#E4E7EB] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          htmlFor="cc-time"
+                          className="block text-xs font-semibold text-[#1F2933] mb-1.5"
+                        >
+                          Hora de cita
+                        </label>
+                        <input
+                          id="cc-time"
+                          type="text"
+                          value={preferredTime}
+                          onChange={(e) => setPreferredTime(e.target.value)}
+                          placeholder="09:30"
+                          className="w-full h-10 border border-[#E4E7EB] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          htmlFor="cc-notes"
+                          className="block text-xs font-semibold text-[#1F2933] mb-1.5"
+                        >
+                          Notas del asesor
+                        </label>
+                        <input
+                          id="cc-notes"
+                          type="text"
+                          value={advisorNotes}
+                          onChange={(e) => setAdvisorNotes(e.target.value)}
+                          placeholder="Confirmado con paciente..."
+                          className="w-full h-10 border border-[#E4E7EB] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-4">
+                      <button
+                        type="button"
+                        disabled={actionLoading}
+                        onClick={handleAssign}
+                        className="h-11 px-5 border border-[#00875A] text-[#00875A] hover:bg-[#00875A] hover:text-[#FFFFFF] font-semibold text-sm transition-colors disabled:opacity-50"
+                      >
+                        Tomar caso
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={actionLoading}
+                        onClick={handleConfirm}
+                        className="h-11 px-6 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] font-semibold text-sm transition-colors disabled:opacity-50"
+                      >
+                        Confirmar cita (Folio + QR)
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <section className="pt-6 border-t border-[#E4E7EB] space-y-4">
+                  <h3 className="text-sm font-bold text-[#1F2933]">
+                    Historial cronológico ({selectedCase.journeyEvents.length} eventos)
                   </h3>
-                  <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
+                  <ol className="divide-y divide-[#E4E7EB] border-t border-b border-[#E4E7EB] max-h-64 overflow-y-auto">
                     {selectedCase.journeyEvents.map((ev) => {
                       const evMeta = EVENT_TYPE_LABELS[ev.eventType] || {
                         label: ev.eventType,
-                        tone: "text-slate-700 bg-slate-100",
+                        tone: "text-[#1F2933]",
                       };
                       return (
-                        <div
+                        <li
                           key={ev.id}
-                          className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 text-xs"
+                          className="py-3 flex flex-wrap items-baseline justify-between gap-2 text-xs"
                         >
-                          <div className="flex items-center gap-2">
-                            <span className={`px-2 py-0.5 rounded font-bold ${evMeta.tone}`}>
+                          <p className="text-[#52606D]">
+                            <strong className={`font-semibold ${evMeta.tone}`}>
                               {evMeta.label}
-                            </span>
-                            <span className="text-slate-500 font-semibold">{ev.channel}</span>
-                            {ev.nextState && (
-                              <span className="inline-flex items-center gap-1 text-slate-700 font-medium">
-                                {ev.prevState ?? "—"}
-                                <ArrowRight className="w-3 h-3" />
-                                {ev.nextState}
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-[11px] font-mono text-slate-400">
+                            </strong>{" "}
+                            · {ev.channel}
+                            {ev.nextState ? ` · ${ev.prevState ?? "—"} → ${ev.nextState}` : ""}
+                          </p>
+                          <time dateTime={ev.createdAt} className="font-mono text-[11px] text-[#52606D]">
                             {formatDateTime(ev.createdAt)} · {formatTimeShort(ev.createdAt)}
-                          </span>
-                        </div>
+                          </time>
+                        </li>
                       );
                     })}
-                  </div>
-                </div>
+                  </ol>
+                </section>
               </>
             )}
-          </div>
+          </section>
         </div>
       </div>
     </CallCenterLayout>
