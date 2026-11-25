@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Orquestación omnicanal — Arquitectura Monolito Modular (WebRTC + IA)</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Tipografía Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <style>
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    .dot-grid {
+      background-color: #f1f5f9;
+      background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+
+    #svg-stage svg {
+      display: block;
+      box-shadow: 0 20px 45px -15px rgba(15, 23, 42, 0.14), 0 4px 12px -4px rgba(15, 23, 42, 0.08);
+      border-radius: 16px;
+      background: #ffffff;
+    }
+  </style>
+</head>
+<body class="h-screen w-screen overflow-hidden flex flex-col bg-slate-100 text-slate-900 antialiased select-none">
+
+  <!-- Barra superior de herramientas -->
+  <header class="shrink-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur-sm px-4 py-2.5">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+
+      <!-- Título y selector de vista -->
+      <div class="flex flex-wrap items-center gap-3">
+        <div class="flex items-center gap-2.5">
+          <div class="h-8 w-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shadow-sm">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h12a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm0 8a2 2 0 012-2h4a2 2 0 012 2v4a2 2 0 01-2 2H6a2 2 0 01-2-2v-4zm10 0a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2h-2a2 2 0 01-2-2v-4z" />
+            </svg>
+          </div>
+          <div>
+            <h1 class="text-sm font-bold tracking-tight text-slate-900">
+              Orquestación omnicanal de atención
+            </h1>
+            <p class="text-[11px] text-slate-500">
+              Monolito Modular por capas y dominios (incluye Call Center WebRTC + STT/Resumen IA)
+            </p>
+          </div>
+        </div>
+
+        <!-- Selector de pestañas -->
+        <nav aria-label="Vistas de arquitectura" class="inline-flex items-center rounded-lg border border-slate-200 bg-slate-100 p-0.5">
+          <button id="tab-tecnica" type="button" data-view="tecnica"
+            class="tab-btn px-3 py-1.5 rounded-md text-xs font-semibold transition-all">
+            Vista Técnica (Infografía Modular)
+          </button>
+          <button id="tab-general" type="button" data-view="general"
+            class="tab-btn px-3 py-1.5 rounded-md text-xs font-medium transition-all">
+            Vista General (Capas Limpias)
+          </button>
+        </nav>
+      </div>
+
+      <!-- Botones de exportación -->
+      <div class="flex items-center gap-2">
+        <button id="btn-export-svg" type="button"
+          class="h-8 px-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4" />
+          </svg>
+          <span>Descargar SVG</span>
+        </button>
+
+        <button id="btn-export-png" type="button"
+          class="h-8 px-3 inline-flex items-center gap-1.5 rounded-lg bg-slate-900 text-xs font-semibold text-white hover:bg-slate-800 transition-colors shadow-sm">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4" />
+          </svg>
+          <span>Descargar PNG (3x)</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Lienzo interactivo (Pan & Zoom) -->
+  <main id="viewport" class="relative flex-1 overflow-hidden dot-grid cursor-grab active:cursor-grabbing touch-none">
+    <div id="transform-layer" class="origin-top-left will-change-transform absolute top-0 left-0">
+      <div id="svg-stage" class="p-8"></div>
+    </div>
+
+    <!-- Ayuda discreta -->
+    <div class="pointer-events-none absolute bottom-3 left-3 z-10 hidden sm:flex items-center gap-2 rounded-lg border border-slate-200/90 bg-white/90 backdrop-blur-sm px-3 py-1.5 text-[11px] text-slate-500 shadow-sm">
+      <span>Rueda: Zoom</span>
+      <span class="text-slate-300">•</span>
+      <span>Arrastrar: Mover</span>
+      <span class="text-slate-300">•</span>
+      <span>Doble clic: Ajustar</span>
+    </div>
+
+    <!-- Controles flotantes de zoom -->
+    <div class="absolute bottom-3 right-3 z-10 inline-flex items-center rounded-lg border border-slate-200 bg-white/95 backdrop-blur-sm p-1 shadow-sm">
+      <button id="btn-zoom-out" type="button" title="Alejar (-)"
+        class="h-8 w-8 inline-flex items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M20 12H4" />
+        </svg>
+      </button>
+      <span id="zoom-readout" class="w-12 text-center text-xs font-semibold text-slate-700">100%</span>
+      <button id="btn-zoom-in" type="button" title="Acercar (+)"
+        class="h-8 w-8 inline-flex items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+        </svg>
+      </button>
+      <div class="h-4 w-px bg-slate-200 mx-1"></div>
+      <button id="btn-fit" type="button" title="Ajustar a la pantalla (0)"
+        class="h-8 px-2.5 inline-flex items-center gap-1.5 rounded-md text-xs font-medium text-slate-700 hover:bg-slate-100 transition-colors">
+        <span>Ajustar</span>
+      </button>
+    </div>
+  </main>
+
+  <!-- Toast de confirmación -->
+  <div id="toast"
+    class="pointer-events-none fixed bottom-16 right-4 z-50 translate-y-2 opacity-0 transition-all duration-200 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-medium text-white shadow-lg">
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      // =========================================================================
+      // SVG 1: VISTA TÉCNICA — INFOGRAFÍA MONOLITO MODULAR (v3 WebRTC + STT IA)
+      // =========================================================================
+      const SVG_TECNICA = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 1020" width="1280" height="1020">
+  <defs>
+    <!-- Fondo con sutil degradado -->
+    <linearGradient id="bg-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#ffffff"/>
+    </linearGradient>
+
+    <!-- Cabecera del Monolito -->
+    <linearGradient id="monolith-header" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#1d4ed8"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+
+    <!-- Sombra suave para tarjetas -->
+    <filter id="card-shadow" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.06"/>
+    </filter>
+
+    <!-- Flechas -->
+    <marker id="arrow-slate" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-emerald" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#059669"/>
+    </marker>
+    <marker id="arrow-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#0d9488"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#d97706"/>
+    </marker>
+    <marker id="arrow-magenta" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#9d174d"/>
+    </marker>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <!-- Fondo blanco limpio -->
+  <rect x="0" y="0" width="1280" height="1020" fill="url(#bg-grad)"/>
+
+  <!-- =================================================================== -->
+  <!-- ENCABEZADO PRINCIPAL                                                -->
+  <!-- =================================================================== -->
+  <text x="640" y="46" text-anchor="middle" font-family="Inter, sans-serif" font-size="27" font-weight="800" fill="#0f172a" letter-spacing="0.4">
+    ORQUESTACIÓN OMNICANAL DE ATENCIÓN
+  </text>
+  <text x="640" y="72" text-anchor="middle" font-family="Inter, sans-serif" font-size="15.5" font-weight="600" fill="#475569">
+    Arquitectura Monolito Modular — Despliegue en AWS + Call Center WebRTC + Gateway WhatsApp Local
+  </text>
+
+  <!-- =================================================================== -->
+  <!-- CAPA SUPERIOR: FRONT-END WEB (CON VOZ P2P) + GATEWAY + RED EXTERNA  -->
+  <!-- =================================================================== -->
+
+  <!-- Bloque 1: Front-End Web (React SPA / Vercel) -->
+  <g filter="url(#card-shadow)">
+    <rect x="44" y="100" width="700" height="114" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+    <rect x="58" y="89" width="248" height="22" rx="11" fill="#0f172a"/>
+    <text x="182" y="104" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.2" font-weight="700" fill="#ffffff">
+      FRONT-END WEB (REACT SPA / VERCEL)
+    </text>
+
+    <!-- Canal de Audio P2P WebRTC directo entre Portal Público y Estación Call Center -->
+    <path d="M 136.5 142 L 136.5 123 L 307.5 123 L 307.5 142" stroke="#0d9488" stroke-width="1.7" fill="none" marker-start="url(#arrow-teal)" marker-end="url(#arrow-teal)"/>
+    <rect x="148" y="114" width="148" height="17" rx="8.5" fill="#ccfbf1" stroke="#5eead4" stroke-width="1"/>
+    <text x="222" y="126" text-anchor="middle" font-family="Inter, sans-serif" font-size="9.2" font-weight="700" fill="#115e59">
+      Audio P2P WebRTC (STUN)
+    </text>
+
+    <!-- 4 Entornos Web -->
+    <rect x="56" y="146" width="161" height="54" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="136.5" y="168" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#0f172a">Portal Público</text>
+    <text x="136.5" y="185" text-anchor="middle" font-family="Inter, sans-serif" font-size="9.8" fill="#475569">Pacientes (JWT + Voz WebRTC)</text>
+
+    <rect x="227" y="146" width="161" height="54" rx="8" fill="#f0fdfa" stroke="#14b8a6" stroke-width="1.3"/>
+    <text x="307.5" y="168" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#0f172a">Estación Call Center</text>
+    <text x="307.5" y="185" text-anchor="middle" font-family="Inter, sans-serif" font-size="9.6" fill="#0f766e">Voz Dual-Track + Resumen IA</text>
+
+    <rect x="398" y="146" width="161" height="54" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2"/>
+    <text x="478.5" y="168" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#0f172a">Back-Office Admin</text>
+    <text x="478.5" y="185" text-anchor="middle" font-family="Inter, sans-serif" font-size="9.8" fill="#475569">Supervisión (JWT Admin)</text>
+
+    <rect x="569" y="146" width="163" height="54" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="4 3"/>
+    <text x="650.5" y="168" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#0f172a">Laboratorio QA</text>
+    <text x="650.5" y="185" text-anchor="middle" font-family="Inter, sans-serif" font-size="9.8" fill="#475569">Simulador y pruebas 2FA</text>
+  </g>
+
+  <!-- Bloque 2: Gateway WhatsApp Independiente (Entorno Local) -->
+  <g filter="url(#card-shadow)">
+    <rect x="766" y="100" width="246" height="114" rx="12" fill="#f0fdf4" stroke="#86efac" stroke-width="1.6"/>
+    <rect x="778" y="89" width="222" height="22" rx="11" fill="#15803d"/>
+    <text x="889" y="104" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" font-weight="700" fill="#ffffff">
+      ENTORNO LOCAL — PROCESO SEPARADO
+    </text>
+
+    <rect x="782" y="135" width="214" height="58" rx="8" fill="#ffffff" stroke="#22c55e" stroke-width="1.3"/>
+    <text x="889" y="158" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#14532d">Gateway WhatsApp</text>
+    <text x="889" y="176" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#166534">Node.js / Baileys + Sesión local</text>
+  </g>
+
+  <!-- Flecha bidireccional WebSocket entre Gateway Local y Red WhatsApp Externa -->
+  <line x1="1016" y1="164" x2="1064" y2="164" stroke="#475569" stroke-width="1.8" marker-start="url(#arrow-slate)" marker-end="url(#arrow-slate)"/>
+  <text x="1040" y="154" text-anchor="middle" font-family="Inter, sans-serif" font-size="9.5" font-weight="600" fill="#475569">WebSocket</text>
+
+  <!-- Bloque 3: Red WhatsApp (Servicio Externo) -->
+  <g filter="url(#card-shadow)">
+    <rect x="1068" y="100" width="168" height="114" rx="12" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <rect x="1086" y="89" width="132" height="22" rx="11" fill="#475569"/>
+    <text x="1152" y="104" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" font-weight="700" fill="#ffffff">
+      SERVICIO EXTERNO
+    </text>
+
+    <rect x="1082" y="135" width="140" height="58" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+    <text x="1152" y="158" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#0f172a">Red WhatsApp</text>
+    <text x="1152" y="176" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#475569">Servidores / Usuarios</text>
+  </g>
+
+  <!-- Conectores desde Capa Superior al Monolito -->
+  <line x1="394" y1="214" x2="394" y2="266" stroke="#2563eb" stroke-width="2.2" marker-start="url(#arrow-blue)" marker-end="url(#arrow-blue)"/>
+  <rect x="234" y="227" width="320" height="22" rx="11" fill="#eff6ff" stroke="#93c5fd" stroke-width="1"/>
+  <text x="394" y="242" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.2" font-weight="600" fill="#1e40af">
+    HTTP REST, SSE, Señalización WebRTC y Audio (JWT)
+  </text>
+
+  <line x1="889" y1="214" x2="889" y2="266" stroke="#16a34a" stroke-width="2.2" marker-start="url(#arrow-emerald)" marker-end="url(#arrow-emerald)"/>
+  <rect x="763" y="227" width="252" height="22" rx="11" fill="#f0fdf4" stroke="#86efac" stroke-width="1"/>
+  <text x="889" y="242" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.2" font-weight="600" fill="#166534">
+    POST entrante / SSE saliente (HMAC-SHA256)
+  </text>
+
+  <!-- =================================================================== -->
+  <!-- CONTENEDOR PRINCIPAL: MONOLITO MODULAR (NUBE AWS)                   -->
+  <!-- =================================================================== -->
+  <g filter="url(#card-shadow)">
+    <rect x="44" y="268" width="1192" height="442" rx="16" fill="#ffffff" stroke="#2563eb" stroke-width="2.4"/>
+
+    <!-- Barra de título del Monolito -->
+    <path d="M 44 284 Q 44 268 60 268 L 1220 268 Q 1236 268 1236 284 L 1236 308 L 44 308 Z" fill="url(#monolith-header)"/>
+    <text x="64" y="293" font-family="Inter, sans-serif" font-size="13.2" font-weight="700" fill="#ffffff" letter-spacing="0.3">
+      MONOLITO MODULAR — NUBE AWS (CONTENEDOR ÚNICO: NODE.JS / FASTIFY v5 + WORKER BULLMQ)
+    </text>
+    <rect x="1064" y="277" width="154" height="22" rx="11" fill="#ffffff" fill-opacity="0.18"/>
+    <text x="1141" y="292" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff">
+      Despliegue unificado
+    </text>
+
+    <!-- Franja de Puerta de Entrada y Seguridad -->
+    <rect x="66" y="322" width="1148" height="42" rx="9" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1.2"/>
+    <text x="640" y="348" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#1e293b">
+      Puerta de Entrada Unificada (API REST 18MB + SSE + Señalización WebRTC)  •  Seguridad: RBAC, JWT y HMAC-SHA256
+    </text>
+
+    <!-- Flechas desde la Puerta de Entrada hacia los 4 módulos -->
+    <line x1="196" y1="364" x2="196" y2="392" stroke="#475569" stroke-width="1.8" marker-end="url(#arrow-slate)"/>
+    <line x1="492" y1="364" x2="492" y2="392" stroke="#475569" stroke-width="1.8" marker-end="url(#arrow-slate)"/>
+    <line x1="788" y1="364" x2="788" y2="392" stroke="#475569" stroke-width="1.8" marker-end="url(#arrow-slate)"/>
+    <line x1="1084" y1="364" x2="1084" y2="392" stroke="#475569" stroke-width="1.8" marker-end="url(#arrow-slate)"/>
+
+    <!-- =============================================================== -->
+    <!-- MÓDULO 1: IDENTIDAD Y ACCESO (AZUL)                             -->
+    <!-- =============================================================== -->
+    <rect x="66" y="396" width="260" height="292" rx="12" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.8"/>
+    <text x="196" y="423" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#1e3a8a">
+      Módulo de Identidad
+    </text>
+
+    <rect x="84" y="440" width="224" height="42" rx="8" fill="#2563eb"/>
+    <text x="196" y="465" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-weight="700" fill="#ffffff">
+      Servicios / Contrato Interno
+    </text>
+    <line x1="196" y1="482" x2="196" y2="502" stroke="#2563eb" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+
+    <rect x="84" y="506" width="224" height="74" rx="8" fill="#bfdbfe" stroke="#60a5fa" stroke-width="1"/>
+    <text x="196" y="528" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#1e3a8a">
+      Capa de Lógica
+    </text>
+    <text x="196" y="547" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#1e40af">
+      Pacientes multibeneficiario y Auth Staff
+    </text>
+    <text x="196" y="564" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#1e40af">
+      Verificación Step-Up 2FA y códigos OTP
+    </text>
+    <line x1="196" y1="580" x2="196" y2="600" stroke="#2563eb" stroke-width="1.6" marker-end="url(#arrow-blue)"/>
+
+    <rect x="84" y="604" width="224" height="66" rx="8" fill="#1e40af"/>
+    <text x="196" y="625" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-weight="700" fill="#ffffff">
+      Acceso a Datos (Prisma / Redis)
+    </text>
+    <text x="196" y="644" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.2" fill="#dbeafe">
+      Expedientes y vínculos (PostgreSQL)
+    </text>
+    <text x="196" y="659" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.2" fill="#dbeafe">
+      Retos OTP con TTL (Redis)
+    </text>
+
+    <!-- =============================================================== -->
+    <!-- MÓDULO 2: ORQUESTACIÓN Y VOZ WEBRTC (ESMERALDA)                 -->
+    <!-- =============================================================== -->
+    <rect x="362" y="396" width="260" height="292" rx="12" fill="#ecfdf5" stroke="#10b981" stroke-width="1.8"/>
+    <text x="492" y="423" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#064e3b">
+      Módulo de Orquestación
+    </text>
+
+    <rect x="380" y="440" width="224" height="42" rx="8" fill="#059669"/>
+    <text x="492" y="465" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-weight="700" fill="#ffffff">
+      Servicios / Contrato Interno
+    </text>
+    <line x1="492" y1="482" x2="492" y2="502" stroke="#059669" stroke-width="1.6" marker-end="url(#arrow-emerald)"/>
+
+    <rect x="380" y="506" width="224" height="74" rx="8" fill="#a7f3d0" stroke="#34d399" stroke-width="1"/>
+    <text x="492" y="528" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#064e3b">
+      Capa de Lógica
+    </text>
+    <text x="492" y="547" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#065f46">
+      Motor de 8 estados y lock optimista (409)
+    </text>
+    <text x="492" y="564" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#065f46">
+      Señalización WebRTC y atención Call Center
+    </text>
+    <line x1="492" y1="580" x2="492" y2="600" stroke="#059669" stroke-width="1.6" marker-end="url(#arrow-emerald)"/>
+
+    <rect x="380" y="604" width="224" height="66" rx="8" fill="#047857"/>
+    <text x="492" y="625" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.2" font-weight="700" fill="#ffffff">
+      Acceso a Datos (Prisma / Redis)
+    </text>
+    <text x="492" y="644" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#d1fae5">
+      Casos, JSONB y catálogos en memoria
+    </text>
+    <text x="492" y="659" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#d1fae5">
+      Sesiones WebRTC TTL 1h (Redis)
+    </text>
+
+    <!-- =============================================================== -->
+    <!-- MÓDULO 3: MENSAJERÍA ASÍNCRONA E IA (ÁMBAR)                     -->
+    <!-- =============================================================== -->
+    <rect x="658" y="396" width="260" height="292" rx="12" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.8"/>
+    <text x="788" y="423" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#78350f">
+      Módulo de Mensajería e IA
+    </text>
+
+    <rect x="676" y="440" width="224" height="42" rx="8" fill="#d97706"/>
+    <text x="788" y="465" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-weight="700" fill="#ffffff">
+      Servicios / Contrato Interno
+    </text>
+    <line x1="788" y1="482" x2="788" y2="502" stroke="#d97706" stroke-width="1.6" marker-end="url(#arrow-amber)"/>
+
+    <rect x="676" y="506" width="224" height="74" rx="8" fill="#fde68a" stroke="#fbbf24" stroke-width="1"/>
+    <text x="788" y="528" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#78350f">
+      Capa de Lógica
+    </text>
+    <text x="788" y="547" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#92400e">
+      Worker BullMQ + DLQ y Plantillas WA
+    </text>
+    <text x="788" y="564" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#92400e">
+      IA OpenAI: Bot NLU + STT y Resumen Voz
+    </text>
+    <line x1="788" y1="580" x2="788" y2="600" stroke="#d97706" stroke-width="1.6" marker-end="url(#arrow-amber)"/>
+
+    <rect x="676" y="604" width="224" height="66" rx="8" fill="#b45309"/>
+    <text x="788" y="625" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-weight="700" fill="#ffffff">
+      Acceso a Datos (Redis / Prisma)
+    </text>
+    <text x="788" y="644" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#fef3c7">
+      Colas SETNX (24h) y envíos salientes
+    </text>
+    <text x="788" y="659" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#fef3c7">
+      Resúmenes de llamadas y entidades
+    </text>
+
+    <!-- =============================================================== -->
+    <!-- MÓDULO 4: AUDITORÍA Y TIEMPO REAL (ROSA/VINO)                   -->
+    <!-- =============================================================== -->
+    <rect x="954" y="396" width="260" height="292" rx="12" fill="#fdf2f8" stroke="#db2777" stroke-width="1.8"/>
+    <text x="1084" y="423" text-anchor="middle" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#831843">
+      Módulo de Auditoría y Eventos
+    </text>
+
+    <rect x="972" y="440" width="224" height="42" rx="8" fill="#be185d"/>
+    <text x="1084" y="465" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-weight="700" fill="#ffffff">
+      Servicios / Contrato Interno
+    </text>
+    <line x1="1084" y1="482" x2="1084" y2="502" stroke="#be185d" stroke-width="1.6" marker-end="url(#arrow-magenta)"/>
+
+    <rect x="972" y="506" width="224" height="74" rx="8" fill="#fbcfe8" stroke="#f472b6" stroke-width="1"/>
+    <text x="1084" y="528" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#831843">
+      Capa de Lógica
+    </text>
+    <text x="1084" y="547" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#9d174d">
+      Bus de eventos interno (correlation_id)
+    </text>
+    <text x="1084" y="564" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#9d174d">
+      Difusión SSE (Journey + Voz + PII)
+    </text>
+    <line x1="1084" y1="580" x2="1084" y2="600" stroke="#be185d" stroke-width="1.6" marker-end="url(#arrow-magenta)"/>
+
+    <rect x="972" y="604" width="224" height="66" rx="8" fill="#9d174d"/>
+    <text x="1084" y="625" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-weight="700" fill="#ffffff">
+      Acceso a Datos (Prisma / Redis)
+    </text>
+    <text x="1084" y="644" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#fce7f3">
+      Bitácora inmutable (PostgreSQL)
+    </text>
+    <text x="1084" y="659" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" fill="#fce7f3">
+      Pub/Sub journey, outbound y webrtc
+    </text>
+
+    <!-- Flechas horizontales punteadas entre Servicios / Contratos Internos -->
+    <line x1="312" y1="461" x2="376" y2="461" stroke="#64748b" stroke-width="1.6" stroke-dasharray="4 3" marker-start="url(#arrow-muted)" marker-end="url(#arrow-muted)"/>
+    <line x1="608" y1="461" x2="672" y2="461" stroke="#64748b" stroke-width="1.6" stroke-dasharray="4 3" marker-start="url(#arrow-muted)" marker-end="url(#arrow-muted)"/>
+    <line x1="904" y1="461" x2="968" y2="461" stroke="#64748b" stroke-width="1.6" stroke-dasharray="4 3" marker-start="url(#arrow-muted)" marker-end="url(#arrow-muted)"/>
+
+    <!-- Etiqueta flotante de comunicación en memoria -->
+    <rect x="526" y="372" width="228" height="20" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
+    <text x="640" y="386" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" font-weight="600" fill="#475569">
+      Comunicación en memoria (sin red)
+    </text>
+  </g>
+
+  <!-- =================================================================== -->
+  <!-- CONECTORES ORTOGONALES HACIA PERSISTENCIA, REDIS Y SERVICIO EXTERNO -->
+  <!-- =================================================================== -->
+  <!-- 1. Identidad -> PostgreSQL (sólida azul) -->
+  <path d="M 176 670 L 176 803" stroke="#1e40af" stroke-width="2" fill="none" marker-end="url(#arrow-blue)"/>
+  <!-- 2. Identidad -> Redis OTP TTL (punteada azul) -->
+  <path d="M 234 670 L 234 762 L 992 762 L 992 805" stroke="#2563eb" stroke-width="1.7" stroke-dasharray="5 3" fill="none" marker-end="url(#arrow-blue)"/>
+  <!-- 3. Orquestación -> PostgreSQL (sólida esmeralda) -->
+  <path d="M 464 670 L 464 734 L 352 734 L 352 796" stroke="#047857" stroke-width="2" fill="none" marker-end="url(#arrow-emerald)"/>
+  <!-- 4. Orquestación -> Redis WebRTC Signaling/Sessions (punteada esmeralda) -->
+  <path d="M 526 670 L 526 750 L 948 750 L 948 801" stroke="#059669" stroke-width="1.7" stroke-dasharray="5 3" fill="none" marker-end="url(#arrow-emerald)"/>
+  <!-- 5. Mensajería e IA -> Redis BullMQ (sólida ámbar) -->
+  <path d="M 768 670 L 768 801" stroke="#b45309" stroke-width="2" fill="none" marker-end="url(#arrow-amber)"/>
+  <!-- 6. Mensajería e IA -> OpenAI (punteada gris) -->
+  <path d="M 852 670 L 852 722 L 1160 722 L 1160 810" stroke="#64748b" stroke-width="1.6" stroke-dasharray="4 3" fill="none" marker-end="url(#arrow-muted)"/>
+  <!-- 7. Auditoría y Eventos -> PostgreSQL (punteada magenta) -->
+  <path d="M 1036 670 L 1036 742 L 520 742 L 520 802" stroke="#9d174d" stroke-width="1.8" stroke-dasharray="5 3" fill="none" marker-end="url(#arrow-magenta)"/>
+  <!-- 8. Auditoría y Eventos -> Redis Pub/Sub (sólida magenta) -->
+  <path d="M 1112 670 L 1112 774 L 904 774 L 904 799" stroke="#9d174d" stroke-width="2" fill="none" marker-end="url(#arrow-magenta)"/>
+
+  <!-- =================================================================== -->
+  <!-- CAPA INFERIOR: POSTGRESQL (RDS/DOCKER) + REDIS (VALKEY/DOCKER) + IA -->
+  <!-- =================================================================== -->
+
+  <!-- Cilindro 1: PostgreSQL 16 (Prisma — 6 tablas) -->
+  <g filter="url(#card-shadow)">
+    <path d="M 96 824 L 96 932 A 256 26 0 0 0 608 932 L 608 824 Z" fill="#eff6ff" stroke="#1e3a8a" stroke-width="2"/>
+    <line x1="266" y1="848" x2="266" y2="954" stroke="#93c5fd" stroke-width="1.4"/>
+    <line x1="438" y1="848" x2="438" y2="954" stroke="#93c5fd" stroke-width="1.4"/>
+    <ellipse cx="352" cy="824" rx="256" ry="26" fill="#dbeafe" stroke="#1e3a8a" stroke-width="2"/>
+    <text x="352" y="829" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1e3a8a">
+      PostgreSQL 16 (Prisma — 6 tablas)
+    </text>
+
+    <text x="181" y="890" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#1e3a8a">Identidad y</text>
+    <text x="181" y="907" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#1e3a8a">Expedientes</text>
+
+    <text x="352" y="890" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-weight="700" fill="#065f46">Estados, JSONB y</text>
+    <text x="352" y="907" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-weight="700" fill="#065f46">Resúmenes de Voz</text>
+
+    <text x="523" y="890" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#831843">Eventos de</text>
+    <text x="523" y="907" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" font-weight="700" fill="#831843">Auditoría Inmutable</text>
+
+    <text x="352" y="986" text-anchor="middle" font-family="Inter, sans-serif" font-size="12.5" font-weight="700" fill="#0f172a">
+      Base de Datos Compartida (Amazon RDS / Docker local)
+    </text>
+  </g>
+
+  <!-- Cilindro 2: Redis 7 (Bus de Datos y Tiempo Real) -->
+  <g filter="url(#card-shadow)">
+    <path d="M 672 824 L 672 932 A 190 24 0 0 0 1052 932 L 1052 824 Z" fill="#fffbeb" stroke="#b45309" stroke-width="2"/>
+    <line x1="862" y1="846" x2="862" y2="954" stroke="#fcd34d" stroke-width="1.4"/>
+    <ellipse cx="862" cy="824" rx="190" ry="24" fill="#fef3c7" stroke="#b45309" stroke-width="2"/>
+    <text x="862" y="829" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#78350f">
+      Redis 7 — Bus de Datos
+    </text>
+
+    <text x="767" y="888" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-weight="700" fill="#92400e">Colas BullMQ e</text>
+    <text x="767" y="905" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.5" font-weight="700" fill="#92400e">Idempotencia</text>
+
+    <text x="957" y="888" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#92400e">Pub/Sub (SSE/WebRTC)</text>
+    <text x="957" y="905" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#92400e">y OTP / Sesiones TTL</text>
+
+    <text x="862" y="986" text-anchor="middle" font-family="Inter, sans-serif" font-size="12.5" font-weight="700" fill="#0f172a">
+      Bus de Datos y Tiempo Real (ElastiCache Valkey / Docker local)
+    </text>
+  </g>
+
+  <!-- Tarjeta Lateral Externa: OpenAI (NLU + STT + Resumen de Llamadas) -->
+  <g filter="url(#card-shadow)">
+    <rect x="1084" y="814" width="152" height="130" rx="12" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <text x="1160" y="840" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.5" font-weight="700" fill="#475569">
+      SERVICIO EXTERNO
+    </text>
+    <text x="1160" y="868" text-anchor="middle" font-family="Inter, sans-serif" font-size="13.5" font-weight="800" fill="#0f172a">
+      OpenAI
+    </text>
+    <text x="1160" y="888" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.2" fill="#475569">
+      Bot NLU + STT / Resumen
+    </text>
+    <text x="1160" y="906" text-anchor="middle" font-family="Inter, sans-serif" font-size="9.8" fill="#64748b">
+      (HTTPS sanitizado opcional)
+    </text>
+  </g>
+</svg>`.trim();
+
+      // =========================================================================
+      // SVG 2: VISTA GENERAL — CAPAS LIMPIAS DE ALTO NIVEL (v3 WebRTC + STT IA)
+      // =========================================================================
+      const SVG_GENERAL = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 740" width="1160" height="740">
+  <defs>
+    <marker id="g-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <!-- Fondo blanco -->
+  <rect x="0" y="0" width="1160" height="740" fill="#ffffff"/>
+
+  <!-- Marco exterior limpio -->
+  <rect x="28" y="24" width="1104" height="692" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+
+  <!-- Título superior -->
+  <text x="580" y="58" text-anchor="middle" font-family="Inter, sans-serif" font-size="18" font-weight="700" fill="#0f172a">
+    Orquestación omnicanal de atención — Arquitectura General
+  </text>
+
+  <!-- =================================================================== -->
+  <!-- CAPA SUPERIOR: FRONT-END WEB (VOZ WEBRTC) + CONECTOR + RED EXTERNA  -->
+  <!-- =================================================================== -->
+  <rect x="58" y="82" width="600" height="72" rx="6" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+  <text x="358" y="114" text-anchor="middle" font-family="Inter, sans-serif" font-size="18" font-weight="600" fill="#0f172a">
+    Front-end Web (Canales de Atención y Voz WebRTC)
+  </text>
+  <text x="358" y="138" text-anchor="middle" font-family="Inter, sans-serif" font-size="11.2" fill="#475569">
+    Portal del Paciente (Voz)  •  Call Center (WebRTC + IA)  •  Panel Admin  •  Pruebas QA
+  </text>
+
+  <!-- Conector WhatsApp Local -->
+  <rect x="678" y="82" width="212" height="72" rx="6" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="784" y="114" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="600" fill="#0f172a">
+    Conector WhatsApp
+  </text>
+  <text x="784" y="138" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#475569">
+    Puente local independiente
+  </text>
+
+  <!-- Flecha hacia Red WhatsApp Externa -->
+  <line x1="894" y1="118" x2="926" y2="118" stroke="#475569" stroke-width="1.6" marker-start="url(#g-arrow)" marker-end="url(#g-arrow)"/>
+
+  <!-- Red WhatsApp (Servicio externo separado) -->
+  <rect x="930" y="82" width="172" height="72" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="1016" y="114" text-anchor="middle" font-family="Inter, sans-serif" font-size="14.5" font-weight="600" fill="#0f172a">
+    Red WhatsApp
+  </text>
+  <text x="1016" y="138" text-anchor="middle" font-family="Inter, sans-serif" font-size="11" fill="#64748b">
+    Servicio externo
+  </text>
+
+  <!-- Flechas hacia el núcleo -->
+  <line x1="358" y1="154" x2="358" y2="188" stroke="#475569" stroke-width="1.8" marker-start="url(#g-arrow)" marker-end="url(#g-arrow)"/>
+  <line x1="784" y1="154" x2="784" y2="188" stroke="#475569" stroke-width="1.8" marker-start="url(#g-arrow)" marker-end="url(#g-arrow)"/>
+
+  <!-- =================================================================== -->
+  <!-- NÚCLEO EN LA NUBE (AWS) — MONOLITO MODULAR (4 MÓDULOS UNIFICADOS)   -->
+  <!-- =================================================================== -->
+  <rect x="58" y="190" width="1044" height="316" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+  <text x="78" y="216" font-family="Inter, sans-serif" font-size="12.5" font-weight="700" fill="#334155">
+    Núcleo de Orquestación — Monolito Modular (Nube AWS)
+  </text>
+
+  <!-- Módulo 1: Identidad -->
+  <rect x="78" y="234" width="234" height="250" rx="4" fill="#ffffff" stroke="#64748b" stroke-width="1.3"/>
+  <text x="195" y="260" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#0f172a">Módulo de Identidad</text>
+  <rect x="94" y="280" width="202" height="82" rx="4" fill="#f1f5f9" stroke="#64748b" stroke-width="1.2"/>
+  <text x="195" y="317" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="500" fill="#0f172a">Capa de lógica</text>
+  <text x="195" y="340" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.8" fill="#475569">Validación, 2FA y multibeneficiario</text>
+  <rect x="94" y="382" width="202" height="82" rx="4" fill="#f1f5f9" stroke="#64748b" stroke-width="1.2"/>
+  <text x="195" y="418" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="500" fill="#0f172a">Acceso a datos</text>
+  <text x="195" y="441" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.8" fill="#475569">Expedientes y códigos OTP</text>
+
+  <!-- Módulo 2: Orquestación -->
+  <rect x="334" y="234" width="234" height="250" rx="4" fill="#ffffff" stroke="#64748b" stroke-width="1.3"/>
+  <text x="451" y="260" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#0f172a">Módulo de Orquestación</text>
+  <rect x="350" y="280" width="202" height="82" rx="4" fill="#f1f5f9" stroke="#64748b" stroke-width="1.2"/>
+  <text x="451" y="317" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="500" fill="#0f172a">Capa de lógica</text>
+  <text x="451" y="340" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.5" fill="#475569">Estados, Call Center y voz WebRTC</text>
+  <rect x="350" y="382" width="202" height="82" rx="4" fill="#f1f5f9" stroke="#64748b" stroke-width="1.2"/>
+  <text x="451" y="418" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="500" fill="#0f172a">Acceso a datos</text>
+  <text x="451" y="441" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.5" fill="#475569">Versiones y sesiones de llamada</text>
+
+  <!-- Módulo 3: Mensajería e IA -->
+  <rect x="590" y="234" width="234" height="250" rx="4" fill="#ffffff" stroke="#64748b" stroke-width="1.3"/>
+  <text x="707" y="260" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#0f172a">Módulo de Mensajería e IA</text>
+  <rect x="606" y="280" width="202" height="82" rx="4" fill="#f1f5f9" stroke="#64748b" stroke-width="1.2"/>
+  <text x="707" y="317" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="500" fill="#0f172a">Capa de lógica</text>
+  <text x="707" y="340" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.5" fill="#475569">WhatsApp, STT y resumen IA</text>
+  <rect x="606" y="382" width="202" height="82" rx="4" fill="#f1f5f9" stroke="#64748b" stroke-width="1.2"/>
+  <text x="707" y="418" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="500" fill="#0f172a">Acceso a datos</text>
+  <text x="707" y="441" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.5" fill="#475569">Colas, transcripción y respuestas</text>
+
+  <!-- Módulo 4: Auditoría y Eventos -->
+  <rect x="846" y="234" width="234" height="250" rx="4" fill="#ffffff" stroke="#64748b" stroke-width="1.3"/>
+  <text x="963" y="260" text-anchor="middle" font-family="Inter, sans-serif" font-size="13" font-weight="600" fill="#0f172a">Módulo de Auditoría y Eventos</text>
+  <rect x="862" y="280" width="202" height="82" rx="4" fill="#f1f5f9" stroke="#64748b" stroke-width="1.2"/>
+  <text x="963" y="317" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="500" fill="#0f172a">Capa de lógica</text>
+  <text x="963" y="340" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.5" fill="#475569">Eventos, señalización y difusión</text>
+  <rect x="862" y="382" width="202" height="82" rx="4" fill="#f1f5f9" stroke="#64748b" stroke-width="1.2"/>
+  <text x="963" y="418" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="500" fill="#0f172a">Acceso a datos</text>
+  <text x="963" y="441" text-anchor="middle" font-family="Inter, sans-serif" font-size="10.5" fill="#475569">Historial inmutable y Pub/Sub</text>
+
+  <!-- Flechas hacia la capa inferior de datos -->
+  <line x1="330" y1="506" x2="330" y2="546" stroke="#475569" stroke-width="1.8" marker-start="url(#g-arrow)" marker-end="url(#g-arrow)"/>
+  <line x1="830" y1="506" x2="830" y2="546" stroke="#475569" stroke-width="1.8" marker-start="url(#g-arrow)" marker-end="url(#g-arrow)"/>
+
+  <!-- =================================================================== -->
+  <!-- CAPA INFERIOR: BASE DE DATOS + BUS DE DATOS (CILINDROS LIMPIOS)     -->
+  <!-- =================================================================== -->
+
+  <!-- Cilindro 1: Base de datos -->
+  <path d="M 120 572 L 120 662 A 210 22 0 0 0 540 662 L 540 572 Z" fill="#f1f5f9" stroke="#64748b" stroke-width="1.6"/>
+  <ellipse cx="330" cy="572" rx="210" ry="22" fill="#e2e8f0" stroke="#64748b" stroke-width="1.6"/>
+  <text x="330" y="626" text-anchor="middle" font-family="Inter, sans-serif" font-size="18" font-weight="600" fill="#0f172a">
+    Base de datos
+  </text>
+  <text x="330" y="650" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#475569">
+    Expedientes, estados, resúmenes y auditoría
+  </text>
+
+  <!-- Cilindro 2: Bus de datos y tiempo real -->
+  <path d="M 620 572 L 620 662 A 210 22 0 0 0 1040 662 L 1040 572 Z" fill="#f1f5f9" stroke="#64748b" stroke-width="1.6"/>
+  <ellipse cx="830" cy="572" rx="210" ry="22" fill="#e2e8f0" stroke="#64748b" stroke-width="1.6"/>
+  <text x="830" y="626" text-anchor="middle" font-family="Inter, sans-serif" font-size="18" font-weight="600" fill="#0f172a">
+    Bus de datos y tiempo real
+  </text>
+  <text x="830" y="650" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#475569">
+    Colas, OTP, señalización WebRTC y SSE
+  </text>
+</svg>`.trim();
+
+      // =========================================================================
+      // ESTADO Y CONTROL DEL VISOR
+      // =========================================================================
+      const VIEWS = {
+        tecnica: {
+          svg: SVG_TECNICA,
+          width: 1280,
+          height: 1020,
+          filename: 'monolito-modular-arquitectura-tecnica'
+        },
+        general: {
+          svg: SVG_GENERAL,
+          width: 1160,
+          height: 740,
+          filename: 'monolito-modular-arquitectura-general'
+        }
+      };
+
+      const state = {
+        activeView: 'tecnica',
+        scale: 1,
+        translateX: 0,
+        translateY: 0,
+        minScale: 0.2,
+        maxScale: 3.5,
+        isDragging: false,
+        dragStartX: 0,
+        dragStartY: 0,
+        lastPinchDist: null,
+        toastTimer: null
+      };
+
+      const dom = {
+        viewport: document.getElementById('viewport'),
+        transformLayer: document.getElementById('transform-layer'),
+        svgStage: document.getElementById('svg-stage'),
+        zoomReadout: document.getElementById('zoom-readout'),
+        tabButtons: document.querySelectorAll('.tab-btn'),
+        btnZoomIn: document.getElementById('btn-zoom-in'),
+        btnZoomOut: document.getElementById('btn-zoom-out'),
+        btnFit: document.getElementById('btn-fit'),
+        btnExportSvg: document.getElementById('btn-export-svg'),
+        btnExportPng: document.getElementById('btn-export-png'),
+        toast: document.getElementById('toast')
+      };
+
+      function showToast(msg) {
+        dom.toast.textContent = msg;
+        dom.toast.classList.remove('opacity-0', 'translate-y-2');
+        dom.toast.classList.add('opacity-100', 'translate-y-0');
+        if (state.toastTimer) clearTimeout(state.toastTimer);
+        state.toastTimer = setTimeout(() => {
+          dom.toast.classList.remove('opacity-100', 'translate-y-0');
+          dom.toast.classList.add('opacity-0', 'translate-y-2');
+        }, 2400);
+      }
+
+      function applyTransform() {
+        dom.transformLayer.style.transform = `translate3d(${state.translateX}px, ${state.translateY}px, 0) scale(${state.scale})`;
+        dom.zoomReadout.textContent = `${Math.round(state.scale * 100)}%`;
+      }
+
+      function clampScale(v) {
+        return Math.min(state.maxScale, Math.max(state.minScale, v));
+      }
+
+      function fitToViewport() {
+        const view = VIEWS[state.activeView];
+        const vw = dom.viewport.clientWidth;
+        const vh = dom.viewport.clientHeight;
+        if (!vw || !vh) return;
+
+        const pad = 64;
+        const contentW = view.width + pad;
+        const contentH = view.height + pad;
+
+        const scaleX = (vw - 32) / contentW;
+        const scaleY = (vh - 32) / contentH;
+        const target = clampScale(Math.min(scaleX, scaleY, 1.0));
+
+        state.scale = target;
+        state.translateX = (vw - contentW * target) / 2;
+        state.translateY = (vh - contentH * target) / 2;
+        applyTransform();
+      }
+
+      function zoomAtPoint(newScale, clientX, clientY) {
+        const clamped = clampScale(newScale);
+        if (clamped === state.scale) return;
+
+        const rect = dom.viewport.getBoundingClientRect();
+        const cx = clientX - rect.left;
+        const cy = clientY - rect.top;
+        const ratio = clamped / state.scale;
+
+        state.translateX = cx - (cx - state.translateX) * ratio;
+        state.translateY = cy - (cy - state.translateY) * ratio;
+        state.scale = clamped;
+        applyTransform();
+      }
+
+      function zoomCenter(factor) {
+        const rect = dom.viewport.getBoundingClientRect();
+        zoomAtPoint(state.scale * factor, rect.left + rect.width / 2, rect.top + rect.height / 2);
+      }
+
+      function switchView(viewId) {
+        if (!VIEWS[viewId]) return;
+        state.activeView = viewId;
+        dom.svgStage.innerHTML = VIEWS[viewId].svg;
+
+        dom.tabButtons.forEach((btn) => {
+          const active = btn.dataset.view === viewId;
+          btn.className = active
+            ? 'tab-btn px-3 py-1.5 rounded-md text-xs font-semibold bg-white text-slate-900 shadow-sm border border-slate-200 transition-all'
+            : 'tab-btn px-3 py-1.5 rounded-md text-xs font-medium text-slate-600 hover:text-slate-900 border border-transparent transition-all';
+        });
+
+        requestAnimationFrame(() => fitToViewport());
+      }
+
+      // =========================================================================
+      // EXPORTACIÓN A SVG Y PNG (3x ALTA RESOLUCIÓN)
+      // =========================================================================
+      function triggerDownload(url, filename) {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+
+      function exportSvg() {
+        const view = VIEWS[state.activeView];
+        const xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + view.svg;
+        const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        triggerDownload(url, `${view.filename}.svg`);
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+        showToast(`SVG descargado: ${view.filename}.svg`);
+      }
+
+      function exportPng3x() {
+        const view = VIEWS[state.activeView];
+        const scale = 3;
+        const canvas = document.createElement('canvas');
+        canvas.width = view.width * scale;
+        canvas.height = view.height * scale;
+
+        const ctx = canvas.getContext('2d');
+        const svgUri = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(view.svg);
+
+        const img = new Image();
+        img.onload = () => {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          triggerDownload(canvas.toDataURL('image/png'), `${view.filename}.png`);
+          showToast(`PNG (3x) descargado: ${view.filename}.png`);
+        };
+        img.src = svgUri;
+      }
+
+      // =========================================================================
+      // INTERACCIÓN (MOUSE, TÁCTIL Y TECLADO)
+      // =========================================================================
+      dom.viewport.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+        zoomAtPoint(state.scale * factor, e.clientX, e.clientY);
+      }, { passive: false });
+
+      dom.viewport.addEventListener('mousedown', (e) => {
+        if (e.button !== 0 || e.target.closest('button')) return;
+        state.isDragging = true;
+        state.dragStartX = e.clientX - state.translateX;
+        state.dragStartY = e.clientY - state.translateY;
+      });
+
+      window.addEventListener('mousemove', (e) => {
+        if (!state.isDragging) return;
+        state.translateX = e.clientX - state.dragStartX;
+        state.translateY = e.clientY - state.dragStartY;
+        applyTransform();
+      });
+
+      window.addEventListener('mouseup', () => {
+        state.isDragging = false;
+      });
+
+      dom.viewport.addEventListener('dblclick', (e) => {
+        if (!e.target.closest('button')) fitToViewport();
+      });
+
+      dom.viewport.addEventListener('touchstart', (e) => {
+        if (e.target.closest('button')) return;
+        if (e.touches.length === 1) {
+          state.isDragging = true;
+          state.lastPinchDist = null;
+          state.dragStartX = e.touches[0].clientX - state.translateX;
+          state.dragStartY = e.touches[0].clientY - state.translateY;
+        } else if (e.touches.length === 2) {
+          state.isDragging = false;
+          state.lastPinchDist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+        }
+      }, { passive: false });
+
+      dom.viewport.addEventListener('touchmove', (e) => {
+        if (e.target.closest('button')) return;
+        e.preventDefault();
+        if (e.touches.length === 1 && state.isDragging) {
+          state.translateX = e.touches[0].clientX - state.dragStartX;
+          state.translateY = e.touches[0].clientY - state.dragStartY;
+          applyTransform();
+        } else if (e.touches.length === 2) {
+          const dist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+          if (state.lastPinchDist) {
+            const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+            const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+            zoomAtPoint(state.scale * (dist / state.lastPinchDist), midX, midY);
+          }
+          state.lastPinchDist = dist;
+        }
+      }, { passive: false });
+
+      dom.viewport.addEventListener('touchend', () => {
+        state.isDragging = false;
+        state.lastPinchDist = null;
+      });
+
+      dom.tabButtons.forEach((btn) => {
+        btn.addEventListener('click', () => switchView(btn.dataset.view));
+      });
+
+      dom.btnZoomIn.addEventListener('click', () => zoomCenter(1.2));
+      dom.btnZoomOut.addEventListener('click', () => zoomCenter(1 / 1.2));
+      dom.btnFit.addEventListener('click', fitToViewport);
+      dom.btnExportSvg.addEventListener('click', exportSvg);
+      dom.btnExportPng.addEventListener('click', exportPng3x);
+
+      window.addEventListener('keydown', (e) => {
+        if (e.key === '+' || e.key === '=') zoomCenter(1.2);
+        else if (e.key === '-') zoomCenter(1 / 1.2);
+        else if (e.key === '0') fitToViewport();
+      });
+
+      window.addEventListener('resize', () => fitToViewport());
+      window.addEventListener('load', () => switchView('tecnica'));
+    })();
+  </script>
+</body>
+</html>
