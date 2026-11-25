@@ -1,11 +1,58 @@
+import crypto from "crypto";
+import bcrypt from "bcryptjs";
 import { FastifyInstance, FastifyReply } from "fastify";
-import { CaseState, EventType, IdentifierType, StaffRole } from "@prisma/client";
+import {
+  ActorRole,
+  CaseState,
+  Channel,
+  EventType,
+  Gender,
+  IdentifierType,
+  StaffRole,
+} from "@prisma/client";
+import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { JOURNEY_PUBSUB_CHANNEL, redis, redisSubscriber } from "../lib/redis";
-import { maskPatientName, normalizePhone } from "../lib/crypto";
-import { findPatientByIdentifier } from "../core/identityService";
+import {
+  maskPatientName,
+  normalizeCurp,
+  normalizeEmail,
+  normalizePersonName,
+  normalizePhone,
+  normalizePlaceName,
+  stripAccents,
+} from "../lib/crypto";
+import { findClinicById, findStudyByCode } from "../data/catalog";
+import { findPatientByIdentifier, upsertIdentityLink } from "../core/identityService";
+import { CaseContextJson, transitionServiceCase } from "../core/stateMachine";
 import { requireStaffRole } from "../middleware/rbac";
 import { whatsappDlqQueue, whatsappInboundQueue } from "../queues/whatsappQueue";
+
+const adminUpdateCaseSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  studyCode: z.string().min(2).optional(),
+  clinicId: z.string().min(2).optional(),
+  preferredDate: z.string().optional(),
+  preferredTime: z.string().optional(),
+  paymentMethod: z.enum(["online", "oxxo", "clinic"]).optional(),
+  nextState: z.nativeEnum(CaseState).optional(),
+  cancelled: z.boolean().optional(),
+  adminNotes: z.string().optional(),
+});
+
+const adminUpdateUserSchema = z.object({
+  firstName: z.string().min(1).optional(),
+  paternalLastName: z.string().min(1).optional(),
+  maternalLastName: z.string().optional().nullable(),
+  birthDate: z.string().optional().nullable(),
+  gender: z.nativeEnum(Gender).optional().nullable(),
+  birthState: z.string().optional().nullable(),
+  country: z.string().optional().nullable(),
+  curp: z.string().optional().nullable(),
+  phone: z.string().optional().nullable(),
+  email: z.string().optional().nullable(),
+  newPassword: z.string().min(6).optional(),
+});
 
 // Clientes SSE conectados a esta instancia Fastify (difusion alimentada por Redis Pub/Sub)
 const sseClients = new Set<FastifyReply>();
@@ -90,6 +137,7 @@ export async function adminRoutes(app: FastifyInstance) {
         const isThirdParty = Boolean(c.requesterPatientId) && c.requesterPatientId !== c.patientId;
         return {
           id: c.id,
+          patientId: c.patientId,
           journeyId: c.journeyId,
           patientMasked: maskPatientName(c.patient.firstName, c.patient.paternalLastName),
           requesterMasked: c.requester
@@ -180,15 +228,19 @@ export async function adminRoutes(app: FastifyInstance) {
         if (p) matchedPatientIds.add(p.id);
       }
 
-      // 3. Búsqueda complementaria por nombre / apellido / coincidencia parcial en patients
+      // 3. Búsqueda complementaria por nombre / apellido (normalizado sin acentos) / correo / teléfono / CURP
+      const queryNoAccents = stripAccents(query);
       const textMatches = await prisma.patient.findMany({
         where: {
           OR: [
             { firstName: { contains: query, mode: "insensitive" } },
+            { firstName: { contains: queryNoAccents, mode: "insensitive" } },
             { paternalLastName: { contains: query, mode: "insensitive" } },
-            { email: { contains: query, mode: "insensitive" } },
+            { paternalLastName: { contains: queryNoAccents, mode: "insensitive" } },
+            { maternalLastName: { contains: queryNoAccents, mode: "insensitive" } },
+            { email: { contains: queryNoAccents.toLowerCase(), mode: "insensitive" } },
             { phone: { contains: query } },
-            { curp: { contains: query.toUpperCase() } },
+            { curp: { contains: queryNoAccents.toUpperCase() } },
           ],
         },
         select: { id: true },
@@ -212,8 +264,8 @@ export async function adminRoutes(app: FastifyInstance) {
               patient: { select: { firstName: true, paternalLastName: true } },
               requester: { select: { firstName: true, paternalLastName: true } },
               journeyEvents: {
-                orderBy: { createdAt: "asc" },
-                take: 40,
+                orderBy: { createdAt: "desc" },
+                take: 50,
               },
             },
           },
@@ -223,8 +275,8 @@ export async function adminRoutes(app: FastifyInstance) {
               patient: { select: { firstName: true, paternalLastName: true } },
               requester: { select: { firstName: true, paternalLastName: true } },
               journeyEvents: {
-                orderBy: { createdAt: "asc" },
-                take: 40,
+                orderBy: { createdAt: "desc" },
+                take: 50,
               },
             },
           },
@@ -246,7 +298,16 @@ export async function adminRoutes(app: FastifyInstance) {
           patientId: p.id,
           patientMasked: maskPatientName(p.firstName, p.paternalLastName),
           hasAccount: Boolean(p.passwordHash),
+          firstName: p.firstName,
+          paternalLastName: p.paternalLastName,
+          maternalLastName: p.maternalLastName,
+          birthDate: p.birthDate ? p.birthDate.toISOString().slice(0, 10) : null,
+          gender: p.gender,
           birthState: p.birthState,
+          country: p.country,
+          curp: p.curp,
+          phone: p.phone,
+          email: p.email,
           createdAt: p.createdAt,
           identities: p.identityLinks,
           cases: mergedCases.map((c) => {
@@ -265,13 +326,319 @@ export async function adminRoutes(app: FastifyInstance) {
                 : null,
               contextSummary: c.contextJson,
               updatedAt: c.updatedAt,
-              events: c.journeyEvents,
+              events: [...c.journeyEvents].reverse(),
             };
           }),
         };
       });
 
       return { count: results.length, results };
+    }
+  );
+
+  /**
+   * Modificación de cita desde Administrador (estudio, clínica, horario, pago, estado o anulación)
+   */
+  app.patch(
+    "/api/admin/cases/:caseId",
+    {
+      preHandler: adminGuard,
+      schema: {
+        tags: ["Rol Administrador (Observabilidad)"],
+        summary: "Modifica una cita (abierta o confirmada) y sincroniza todos los canales vía SSE",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request, reply) => {
+      const { caseId } = request.params as { caseId: string };
+      const body = adminUpdateCaseSchema.parse(request.body);
+      const adminUser = request.staffUser!;
+
+      const existing = await prisma.serviceCase.findUnique({ where: { id: caseId } });
+      if (!existing) {
+        return reply.status(404).send({ error: "CASE_NOT_FOUND", message: "Cita no encontrada." });
+      }
+
+      const prevCtx = (existing.contextJson ?? {}) as CaseContextJson;
+      const contextPatch: Partial<CaseContextJson> = {};
+      const changes: Record<string, unknown> = {};
+
+      if (body.studyCode) {
+        const st = findStudyByCode(body.studyCode);
+        if (!st) {
+          return reply.status(400).send({ error: "INVALID_STUDY", message: "Estudio no encontrado en catálogo." });
+        }
+        contextPatch.study = { code: st.code, name: st.name, price: st.price, prep: st.prep };
+        changes.studyCode = st.code;
+      }
+
+      if (body.clinicId) {
+        const cl = findClinicById(body.clinicId);
+        if (!cl) {
+          return reply.status(400).send({ error: "INVALID_CLINIC", message: "Clínica no encontrada en catálogo." });
+        }
+        contextPatch.clinic = { id: cl.id, name: cl.name, city: cl.city, address: cl.address };
+        changes.clinicId = cl.id;
+      }
+
+      if (body.preferredDate || body.preferredTime) {
+        contextPatch.preferred_slot = {
+          date: body.preferredDate || prevCtx.preferred_slot?.date || new Date().toISOString().slice(0, 10),
+          time: body.preferredTime || prevCtx.preferred_slot?.time || "09:30",
+        };
+        changes.preferredSlot = contextPatch.preferred_slot;
+      }
+
+      if (body.paymentMethod) {
+        contextPatch.payment_method = body.paymentMethod;
+        changes.paymentMethod = body.paymentMethod;
+      }
+
+      if (body.cancelled !== undefined) {
+        contextPatch.cancelled = body.cancelled;
+        contextPatch.cancelled_reason = body.cancelled
+          ? body.adminNotes?.trim() || "ANULADA_POR_ADMINISTRADOR"
+          : undefined;
+        changes.cancelled = body.cancelled;
+      }
+
+      const targetState = body.cancelled
+        ? CaseState.PAUSADO_PENDIENTE
+        : body.nextState ?? existing.currentState;
+
+      const effectiveStudy = contextPatch.study ?? prevCtx.study;
+      const effectiveClinic = contextPatch.clinic ?? prevCtx.clinic;
+
+      if (targetState === CaseState.CITA_CONFIRMADA) {
+        const folio = prevCtx.appointment_folio || `SD-2026-${crypto.randomInt(1000, 9999)}`;
+        contextPatch.appointment_folio = folio;
+        contextPatch.qr_payload = `SALUDDIGNA|${folio}|${effectiveStudy?.code ?? "EST"}|${effectiveClinic?.id ?? "CLN"}`;
+        contextPatch.cancelled = false;
+      }
+
+      const eventType =
+        targetState === CaseState.CITA_CONFIRMADA && existing.currentState !== CaseState.CITA_CONFIRMADA
+          ? EventType.APPOINTMENT_CONFIRMED
+          : body.cancelled
+          ? EventType.FLOW_INTERRUPTED
+          : EventType.CONTEXT_REHYDRATED;
+
+      const { updatedCase, correlationId } = await transitionServiceCase({
+        caseId: existing.id,
+        expectedVersion: body.expectedVersion,
+        nextState: targetState,
+        channel: Channel.SYSTEM,
+        actorRole: ActorRole.ADMIN,
+        eventType,
+        contextPatch,
+        eventPayload: {
+          via: "admin_case_edit",
+          adminName: adminUser.fullName,
+          adminNotes: body.adminNotes?.trim() || null,
+          changes,
+        },
+      });
+
+      return { case: updatedCase, correlationId };
+    }
+  );
+
+  /**
+   * Modificación de cuenta y perfil de paciente desde Administrador (con normalización canónica)
+   */
+  app.patch(
+    "/api/admin/users/:patientId",
+    {
+      preHandler: adminGuard,
+      schema: {
+        tags: ["Rol Administrador (Observabilidad)"],
+        summary: "Actualiza datos de la cuenta de un paciente (normalizados sin acentos/mayúsculas) y refresca sus expedientes",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request, reply) => {
+      const { patientId } = request.params as { patientId: string };
+      const body = adminUpdateUserSchema.parse(request.body);
+      const adminUser = request.staffUser!;
+
+      const existing = await prisma.patient.findUnique({ where: { id: patientId } });
+      if (!existing) {
+        return reply.status(404).send({ error: "PATIENT_NOT_FOUND", message: "Paciente no encontrado." });
+      }
+
+      const updateData: Record<string, unknown> = {};
+      const updatedFields: string[] = [];
+
+      if (body.firstName !== undefined) {
+        const norm = normalizePersonName(body.firstName);
+        if (norm) {
+          updateData.firstName = norm;
+          updatedFields.push("firstName");
+        }
+      }
+      if (body.paternalLastName !== undefined) {
+        const norm = normalizePersonName(body.paternalLastName);
+        if (norm) {
+          updateData.paternalLastName = norm;
+          updatedFields.push("paternalLastName");
+        }
+      }
+      if (body.maternalLastName !== undefined) {
+        updateData.maternalLastName = body.maternalLastName
+          ? normalizePersonName(body.maternalLastName) ?? null
+          : null;
+        updatedFields.push("maternalLastName");
+      }
+      if (body.birthDate !== undefined) {
+        if (!body.birthDate) {
+          updateData.birthDate = null;
+        } else if (/^\d{4}-\d{2}-\d{2}$/.test(body.birthDate)) {
+          updateData.birthDate = new Date(body.birthDate);
+        }
+        updatedFields.push("birthDate");
+      }
+      if (body.gender !== undefined) {
+        updateData.gender = body.gender ?? null;
+        updatedFields.push("gender");
+      }
+      if (body.birthState !== undefined) {
+        updateData.birthState = body.birthState ? normalizePlaceName(body.birthState) ?? null : null;
+        updatedFields.push("birthState");
+      }
+      if (body.country !== undefined) {
+        updateData.country = body.country ? normalizePlaceName(body.country) ?? "MEXICO" : "MEXICO";
+        updatedFields.push("country");
+      }
+
+      let nextEmail: string | null | undefined = undefined;
+      if (body.email !== undefined) {
+        if (!body.email || !body.email.trim()) {
+          nextEmail = null;
+        } else {
+          const normEmail = normalizeEmail(body.email);
+          if (!normEmail) {
+            return reply.status(400).send({ error: "INVALID_EMAIL", message: "Correo electrónico inválido." });
+          }
+          const collision = await prisma.patient.findFirst({
+            where: { email: { equals: normEmail, mode: "insensitive" }, id: { not: existing.id } },
+          });
+          if (collision) {
+            return reply.status(409).send({
+              error: "EMAIL_ALREADY_IN_USE",
+              message: "Ese correo electrónico ya pertenece a otra cuenta de paciente.",
+            });
+          }
+          nextEmail = normEmail;
+        }
+        updateData.email = nextEmail;
+        updatedFields.push("email");
+      }
+
+      let nextCurp: string | null | undefined = undefined;
+      if (body.curp !== undefined) {
+        if (!body.curp || !body.curp.trim()) {
+          nextCurp = null;
+        } else {
+          const normCurp = normalizeCurp(body.curp);
+          if (!normCurp || normCurp.length !== 18) {
+            return reply.status(400).send({
+              error: "INVALID_CURP",
+              message: "La CURP debe tener exactamente 18 caracteres.",
+            });
+          }
+          const collision = await prisma.patient.findFirst({
+            where: { curp: normCurp, id: { not: existing.id } },
+          });
+          if (collision) {
+            return reply.status(409).send({
+              error: "CURP_ALREADY_IN_USE",
+              message: "Esa CURP ya pertenece a otro expediente.",
+            });
+          }
+          nextCurp = normCurp;
+        }
+        updateData.curp = nextCurp;
+        updatedFields.push("curp");
+      }
+
+      let nextPhone: string | null | undefined = undefined;
+      if (body.phone !== undefined) {
+        if (!body.phone || !body.phone.trim()) {
+          nextPhone = null;
+        } else {
+          if (body.phone.replace(/\D/g, "").length < 10) {
+            return reply.status(400).send({
+              error: "INVALID_PHONE",
+              message: "El teléfono debe contener al menos 10 dígitos.",
+            });
+          }
+          nextPhone = normalizePhone(body.phone);
+        }
+        updateData.phone = nextPhone;
+        updatedFields.push("phone");
+      }
+
+      if (body.newPassword) {
+        updateData.passwordHash = await bcrypt.hash(body.newPassword, 10);
+        updatedFields.push("password");
+      }
+
+      const updatedPatient = await prisma.patient.update({
+        where: { id: existing.id },
+        data: updateData,
+      });
+
+      if (nextPhone) {
+        await upsertIdentityLink(updatedPatient.id, IdentifierType.PHONE, nextPhone, true);
+      }
+      if (nextEmail) {
+        await upsertIdentityLink(updatedPatient.id, IdentifierType.EMAIL, nextEmail, true);
+      }
+      if (nextCurp) {
+        await upsertIdentityLink(updatedPatient.id, IdentifierType.CURP, nextCurp, true);
+      }
+
+      // Refrescar resumen handoff y SSE en los expedientes recientes de este paciente
+      const recentCases = await prisma.serviceCase.findMany({
+        where: { OR: [{ patientId: updatedPatient.id }, { requesterPatientId: updatedPatient.id }] },
+        orderBy: { updatedAt: "desc" },
+        take: 5,
+      });
+
+      for (const sc of recentCases) {
+        await transitionServiceCase({
+          caseId: sc.id,
+          expectedVersion: sc.version,
+          nextState: sc.currentState,
+          channel: Channel.SYSTEM,
+          actorRole: ActorRole.ADMIN,
+          eventType: EventType.IDENTITY_LINKED,
+          eventPayload: {
+            via: "admin_user_account_edit",
+            adminName: adminUser.fullName,
+            updatedFields,
+          },
+        }).catch(() => {});
+      }
+
+      return {
+        patient: {
+          patientId: updatedPatient.id,
+          patientMasked: maskPatientName(updatedPatient.firstName, updatedPatient.paternalLastName),
+          hasAccount: Boolean(updatedPatient.passwordHash),
+          firstName: updatedPatient.firstName,
+          paternalLastName: updatedPatient.paternalLastName,
+          maternalLastName: updatedPatient.maternalLastName,
+          birthDate: updatedPatient.birthDate ? updatedPatient.birthDate.toISOString().slice(0, 10) : null,
+          gender: updatedPatient.gender,
+          birthState: updatedPatient.birthState,
+          country: updatedPatient.country,
+          curp: updatedPatient.curp,
+          phone: updatedPatient.phone,
+          email: updatedPatient.email,
+        },
+        updatedFields,
+      };
     }
   );
 

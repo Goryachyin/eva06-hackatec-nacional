@@ -179,6 +179,49 @@ const STATE_SHORT: Record<CaseState, string> = {
   CITA_CONFIRMADA: "Cita confirmada",
 };
 
+function normalizeForMatch(raw: string): string {
+  return raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function findStudyInText(text: string) {
+  const norm = normalizeForMatch(text);
+  if (!norm) return undefined;
+  return STUDIES_CATALOG.find((s) => {
+    const codeNorm = normalizeForMatch(s.code);
+    const nameNorm = normalizeForMatch(s.name);
+    const catNorm = normalizeForMatch(s.category);
+    const firstWord = nameNorm.split(/\s+/)[0] || "";
+    const firstTwo = nameNorm.split(/\s+/).slice(0, 2).join(" ");
+    return (
+      norm.includes(codeNorm) ||
+      (firstTwo.length >= 5 && norm.includes(firstTwo)) ||
+      (firstWord.length >= 4 && norm.includes(firstWord)) ||
+      norm.includes(catNorm)
+    );
+  });
+}
+
+function findClinicInText(text: string) {
+  const norm = normalizeForMatch(text);
+  if (!norm) return undefined;
+  return CLINICS_CATALOG.find((c) => {
+    const idNorm = normalizeForMatch(c.id);
+    const nameNorm = normalizeForMatch(c.name);
+    const cityNorm = normalizeForMatch(c.city.split(",")[0] || "");
+    const branchKeyword = nameNorm.replace(/^clinica\s+/i, "").trim();
+    return (
+      norm.includes(idNorm) ||
+      (cityNorm.length >= 3 && norm.includes(cityNorm)) ||
+      (branchKeyword.length >= 4 && norm.includes(branchKeyword)) ||
+      (c.id === "CDMX-01" && /\b(cdmx|ciudad de mexico|lindavista)\b/.test(norm))
+    );
+  });
+}
+
 /**
  * Motor deterministico del Canal WhatsApp (CERO Bot-Bot / CERO Meta Cloud API).
  * Soporta:
@@ -219,8 +262,8 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
         });
   }
 
-  // 2. Obtener TODOS los tramites abiertos gestionados por este titular o donde es beneficiario
-  const openCases = await prisma.serviceCase.findMany({
+  // 2. Obtener TODOS los tramites abiertos (excluyendo los anulados explícitamente por el paciente)
+  const rawOpenCases = await prisma.serviceCase.findMany({
     where: {
       OR: [{ requesterPatientId: holder.id }, { patientId: holder.id }],
       currentState: { not: CaseState.CITA_CONFIRMADA },
@@ -229,14 +272,29 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
       patient: { select: { id: true, firstName: true, paternalLastName: true, phone: true } },
     },
     orderBy: { updatedAt: "desc" },
-    take: 10,
+    take: 15,
   });
 
-  // Comando explicito "NUEVO" para abrir una nueva cotizacion aunque existan otras
-  const wantsNewCase = /^nuevo(\s+estudio)?$/i.test(text);
+  const openCases = rawOpenCases.filter((c) => {
+    const cCtx = (c.contextJson ?? {}) as CaseContextJson;
+    return !cCtx.cancelled;
+  });
 
-  // Comando explicito "MENU" / "CAMBIAR" / "MIS CITAS" para listar tramites familiares/propios
-  const wantsMenu = /^(menu|men[uú]|cambiar|mis citas|tramites|tr[aá]mites)$/i.test(text);
+  // Menú rápido de acceso directo (funciona en cualquier momento vía chat)
+  const wantsQuickMenu = /^(0|menu|men[uú]|opciones|ayuda)$/i.test(text);
+  if (wantsQuickMenu) {
+    const reply = BOT_TEMPLATES.welcomeMenu();
+    await replyToPatient(jobData, reply);
+    return { reply };
+  }
+
+  // Comando explicito "NUEVO" / "NUEVA CITA" para abrir una nueva cotizacion
+  const wantsNewCase =
+    /^(nuevo|nueva)(\s+(estudio|cita|tr[aá]mite))?$/i.test(text) ||
+    /\b(nueva\s+cita|otra\s+cita|agendar\s+otra|registrar\s+otra|quiero\s+otra\s+cita)\b/i.test(text);
+
+  // Comando explicito "CAMBIAR" / "MIS CITAS" para listar tramites familiares/propios
+  const wantsMenu = /^(cambiar|mis citas|tramites|tr[aá]mites)$/i.test(text);
 
   if (wantsMenu && openCases.length > 0) {
     await redis.del(SELECTED_CASE_KEY(phone));
@@ -254,11 +312,24 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
     return { reply };
   }
 
-  // Seleccionar caso activo (soporte multibeneficiario cuando hay > 1 tramite abierto)
+  // Seleccionar caso activo (si hay un trámite incompleto y pide una NUEVA cita, lo pasamos al asistente
+  // para que pregunte si desea guardarlo o anularlo antes de generar el nuevo).
   let selectedCaseId = await redis.get(SELECTED_CASE_KEY(phone));
-  let activeCase = wantsNewCase
-    ? undefined
-    : openCases.find((c) => c.id === selectedCaseId) ?? (openCases.length === 1 ? openCases[0] : undefined);
+  let activeCase =
+    openCases.find((c) => c.id === selectedCaseId) ??
+    (openCases.length === 1 ? openCases[0] : undefined);
+
+  if (wantsNewCase && activeCase) {
+    const activeCtx = (activeCase.contextJson ?? {}) as CaseContextJson;
+    const hasProgress = Boolean(
+      activeCtx.study || activeCtx.clinic || activeCtx.preferred_slot || activeCase.currentState !== CaseState.INICIADO
+    );
+    // Si el caso abierto no tenía avance real ni OpenAI activo, creamos uno limpio; si sí tenía avance,
+    // el asistente preguntará (a) Guardar y retomar luego vs (b) Anular y crear nueva.
+    if (!hasProgress && !env.OPENAI_API_KEY) {
+      activeCase = undefined;
+    }
+  }
 
   // Si hay varios tramites abiertos (ej. Titular + Hijo/a) y aun no elige cual retomar
   if (!wantsNewCase && openCases.length > 1 && !activeCase) {
@@ -310,10 +381,27 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
     }
   }
 
-  // Si no tiene tramite abierto (o pidio "NUEVO"), revisar si pregunta por cita confirmada o crear caso nuevo
+  // Si no tiene tramite abierto (por ej. ya completó su cita anterior o es usuario nuevo):
   if (!activeCase) {
-    if (!wantsNewCase && /cita|folio|estado|status/i.test(text)) {
-      const confirmed = await prisma.serviceCase.findFirst({
+    const wantsOnlyStatusCheck =
+      !wantsNewCase &&
+      (/^(2)$/i.test(text) ||
+        (/\b(mi\s+folio|ver\s+mis?\s+citas?|consultar\s+mis?\s+citas?|estatus|status|estado\s+de\s+mi\s+cita|folios?)\b/i.test(
+          text
+        ) &&
+          !/\b(nueva|otra|otro|agendar|reservar|registrar|cotizar|editar|modificar|cambiar|reagendar)\b/i.test(
+            text
+          )));
+
+    const wantsEditConfirmed =
+      !wantsNewCase &&
+      (/^(3)$/i.test(text) ||
+        /\b(editar|modificar|reagendar|cambiar\s+(mi\s+)?(cita|hora|horario|fecha|cl[ií]nica|estudio|pago))\b/i.test(
+          text
+        ));
+
+    if (wantsOnlyStatusCheck) {
+      const confirmedList = await prisma.serviceCase.findMany({
         where: {
           OR: [{ requesterPatientId: holder.id }, { patientId: holder.id }],
           currentState: CaseState.CITA_CONFIRMADA,
@@ -322,17 +410,67 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
           patient: { select: { firstName: true, paternalLastName: true } },
         },
         orderBy: { updatedAt: "desc" },
+        take: 5,
       });
-      if (confirmed) {
-        const ctx = (confirmed.contextJson ?? {}) as CaseContextJson;
-        const who = maskPatientName(confirmed.patient.firstName, confirmed.patient.paternalLastName);
+      if (confirmedList.length > 0) {
+        const blocks = confirmedList.map((c) => {
+          const ctx = (c.contextJson ?? {}) as CaseContextJson;
+          const who = maskPatientName(c.patient.firstName, c.patient.paternalLastName);
+          const slotTxt = ctx.preferred_slot
+            ? `${ctx.preferred_slot.date} a las ${ctx.preferred_slot.time}`
+            : "Horario por confirmar";
+          return (
+            `✅ *Folio ${ctx.appointment_folio ?? "Activo"}* (${who}):\n` +
+            `• Estudio: ${ctx.study?.name ?? "Estudio"}\n` +
+            `• Clínica: ${ctx.clinic?.name ?? "Clínica asignada"}\n` +
+            `• Horario: ${slotTxt}`
+          );
+        });
         const reply =
-          `✅ Cita confirmada (${ctx.appointment_folio ?? "Folio activo"}) para ${who}:\n` +
-          `• Estudio: ${ctx.study?.name ?? "Estudio"}\n` +
-          `• Clínica: ${ctx.clinic?.name ?? "Clínica asignada"}\n` +
-          `• Preparación: ${ctx.study?.prep ?? "Presentarse 15 min antes."}`;
+          `${blocks.join("\n\n")}\n\n` +
+          `¿Qué deseas hacer ahora?\n` +
+          `• Escribe *1* o *NUEVA CITA* para agendar otro estudio.\n` +
+          `• Escribe *3* o *EDITAR CITA* si quieres modificar fecha, horario, clínica o estudio.\n` +
+          `• Escribe *MENÚ* para ver todas las opciones rápidas.`;
         await replyToPatient(jobData, reply);
         return { reply };
+      }
+    }
+
+    // Si quiere editar/reagendar una cita ya confirmada, operar directamente sobre ella sin abrir un borrador vacío
+    if (wantsEditConfirmed) {
+      const latestConfirmed = await prisma.serviceCase.findFirst({
+        where: {
+          OR: [{ requesterPatientId: holder.id }, { patientId: holder.id }],
+          currentState: CaseState.CITA_CONFIRMADA,
+        },
+        include: {
+          patient: { select: { id: true, firstName: true, paternalLastName: true, phone: true } },
+        },
+        orderBy: { updatedAt: "desc" },
+      });
+
+      if (latestConfirmed && env.OPENAI_API_KEY) {
+        const history = await getSimulatedChatHistory(phone);
+        const aiRes = await runSmartWhatsAppAssistant({
+          serviceCase: latestConfirmed,
+          holder,
+          patientFirstName: latestConfirmed.patient.firstName,
+          isThirdParty: latestConfirmed.patientId !== holder.id,
+          relationshipLabel: latestConfirmed.relationshipLabel || "Titular",
+          history,
+          userText: text,
+          correlationId,
+          whatsappLid: jobData.whatsappLid,
+          isUnresolvedLid,
+        });
+        if (aiRes) {
+          if (aiRes.switchedCaseId && !aiRes.confirmed) {
+            await redis.set(SELECTED_CASE_KEY(phone), aiRes.switchedCaseId, "EX", 1800);
+          }
+          await replyToPatient(jobData, aiRes.reply);
+          return { reply: aiRes.reply };
+        }
       }
     }
 
@@ -392,12 +530,7 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
       }
     }
 
-    const matchedStudy = STUDIES_CATALOG.find(
-      (s) =>
-        text.toLowerCase().includes(s.code.toLowerCase()) ||
-        text.toLowerCase().includes(s.name.toLowerCase().split(" ")[0]) ||
-        text.toLowerCase().includes(s.category.toLowerCase())
-    );
+    const matchedStudy = findStudyInText(text);
 
     if (matchedStudy) {
       await transitionServiceCase({
@@ -427,13 +560,19 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
       return { reply };
     }
 
-    if (/^1$|servicio|estudio|cat[aá]logo|precio|cotizar/i.test(text)) {
+    if (/^4$|servicio|estudio|cat[aá]logo|precio|cotizar/i.test(text)) {
       const reply = BOT_TEMPLATES.studiesCatalog();
       await replyToPatient(jobData, reply);
       return { reply };
     }
 
-    if (/^2$|cl[ií]nica|sucursal|horario|direcci[oó]n|ubicaci[oó]n/i.test(text)) {
+    if (/^1$/i.test(text)) {
+      const reply = BOT_TEMPLATES.studiesCatalog();
+      await replyToPatient(jobData, reply);
+      return { reply };
+    }
+
+    if (/cl[ií]nica|sucursal|horario|direcci[oó]n|ubicaci[oó]n/i.test(text)) {
       const reply = BOT_TEMPLATES.clinicsList();
       await replyToPatient(jobData, reply);
       return { reply };
@@ -601,7 +740,7 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
     return { reply };
   }
 
-  if (/^4$|asesor|call\s*center|humano|operador|llamada/i.test(text)) {
+  if (/^6$|asesor|call\s*center|humano|operador|llamada/i.test(text)) {
     const existingQuestions = ctx.open_questions ?? [];
     await transitionServiceCase({
       caseId: activeCase.id,
@@ -621,14 +760,7 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
     return { reply };
   }
 
-  const matchedStudyExisting = !ctx.study
-    ? STUDIES_CATALOG.find(
-        (s) =>
-          text.toLowerCase().includes(s.code.toLowerCase()) ||
-          text.toLowerCase().includes(s.name.toLowerCase().split(" ")[0]) ||
-          text.toLowerCase().includes(s.category.toLowerCase())
-      )
-    : undefined;
+  const matchedStudyExisting = !ctx.study ? findStudyInText(text) : undefined;
 
   if (matchedStudyExisting) {
     await transitionServiceCase({
@@ -659,11 +791,7 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
     return { reply };
   }
 
-  const matchedClinic = CLINICS_CATALOG.find(
-    (c) =>
-      text.toLowerCase().includes(c.id.toLowerCase()) ||
-      text.toLowerCase().includes(c.city.toLowerCase().split(",")[0])
-  );
+  const matchedClinic = findClinicInText(text);
 
   if (matchedClinic && !ctx.clinic) {
     await transitionServiceCase({
@@ -690,7 +818,7 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
     return { reply };
   }
 
-  if (/^confirmar|agendar$/i.test(text)) {
+  if (/\b(confirmar|confirmo|agendar|agendo|reservar|reservo)\b/i.test(text) && ctx.study && ctx.clinic) {
     const folio = `SD-2026-${crypto.randomInt(1000, 9999)}`;
     await transitionServiceCase({
       caseId: activeCase.id,

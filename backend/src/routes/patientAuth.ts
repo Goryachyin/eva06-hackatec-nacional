@@ -7,7 +7,11 @@ import { JOURNEY_PUBSUB_CHANNEL, redisSubscriber } from "../lib/redis";
 import {
   maskIdentifier,
   maskPatientName,
+  normalizeCurp,
+  normalizeEmail,
+  normalizePersonName,
   normalizePhone,
+  normalizePlaceName,
   signPatientJwt,
 } from "../lib/crypto";
 import {
@@ -118,11 +122,13 @@ export async function patientAuthRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const body = patientRegisterSchema.parse(request.body);
-      const cleanEmail = body.email.trim().toLowerCase();
-      const cleanCurp = body.curp.trim().toUpperCase();
+      const cleanEmail = normalizeEmail(body.email) ?? body.email.trim().toLowerCase();
+      const cleanCurp = normalizeCurp(body.curp) ?? body.curp.trim().toUpperCase();
       const cleanPhone = normalizePhone(body.telefono);
 
-      const existingByEmail = await prisma.patient.findUnique({ where: { email: cleanEmail } });
+      const existingByEmail = await prisma.patient.findFirst({
+        where: { email: { equals: cleanEmail, mode: "insensitive" } },
+      });
       if (existingByEmail && existingByEmail.passwordHash) {
         return reply.status(409).send({
           error: "ACCOUNT_ALREADY_EXISTS",
@@ -131,13 +137,13 @@ export async function patientAuthRoutes(app: FastifyInstance) {
       }
 
       const patient = await resolveOrCreatePatient({
-        firstName: body.nombres,
-        paternalLastName: body.apellido_paterno,
-        maternalLastName: body.apellido_materno,
+        firstName: normalizePersonName(body.nombres) ?? body.nombres,
+        paternalLastName: normalizePersonName(body.apellido_paterno) ?? body.apellido_paterno,
+        maternalLastName: normalizePersonName(body.apellido_materno),
         birthDate: body.fecha_nacimiento,
         gender: body.genero,
-        birthState: body.estado_nacimiento,
-        country: body.pais,
+        birthState: normalizePlaceName(body.estado_nacimiento) ?? body.estado_nacimiento,
+        country: normalizePlaceName(body.pais) ?? "MEXICO",
         curp: cleanCurp,
         phone: cleanPhone,
         email: cleanEmail,
@@ -202,9 +208,13 @@ export async function patientAuthRoutes(app: FastifyInstance) {
 
       let patient: Patient | null = null;
       if (raw.includes("@")) {
-        patient = await prisma.patient.findUnique({ where: { email: raw.toLowerCase() } });
+        const cleanEmail = normalizeEmail(raw) ?? raw.toLowerCase();
+        patient = await prisma.patient.findFirst({
+          where: { email: { equals: cleanEmail, mode: "insensitive" } },
+        });
       } else if (/^[A-Za-z0-9]{18}$/.test(raw)) {
-        patient = await prisma.patient.findUnique({ where: { curp: raw.toUpperCase() } });
+        const cleanCurp = normalizeCurp(raw) ?? raw.toUpperCase();
+        patient = await prisma.patient.findUnique({ where: { curp: cleanCurp } });
       } else {
         patient = await prisma.patient.findFirst({
           where: { phone: normalizePhone(raw), passwordHash: { not: null } },

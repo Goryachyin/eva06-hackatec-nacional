@@ -18,6 +18,54 @@ export interface PatientTokenPayload {
 }
 
 /**
+ * Elimina acentos/diacríticos y colapsa espacios repetidos para comparación/normalización canónica.
+ */
+export function stripAccents(raw: string): string {
+  return raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Normaliza nombres y apellidos a MAYÚSCULAS sin acentos (estándar clínico / RENAPO)
+ * para evitar divergencias en la vinculación omnicanal inteligente.
+ */
+export function normalizePersonName(raw?: string | null): string | undefined {
+  if (!raw) return undefined;
+  const clean = stripAccents(raw).toUpperCase();
+  return clean.length > 0 ? clean : undefined;
+}
+
+/**
+ * Normaliza estados o países a MAYÚSCULAS sin acentos.
+ */
+export function normalizePlaceName(raw?: string | null): string | undefined {
+  if (!raw) return undefined;
+  const clean = stripAccents(raw).toUpperCase();
+  return clean.length > 0 ? clean : undefined;
+}
+
+/**
+ * Normaliza correos electrónicos a minúsculas sin acentos ni espacios laterales.
+ */
+export function normalizeEmail(raw?: string | null): string | undefined {
+  if (!raw) return undefined;
+  const clean = stripAccents(raw).replace(/\s+/g, "").toLowerCase();
+  return clean.includes("@") ? clean : undefined;
+}
+
+/**
+ * Normaliza CURP a MAYÚSCULAS sin espacios ni acentos.
+ */
+export function normalizeCurp(raw?: string | null): string | undefined {
+  if (!raw) return undefined;
+  const clean = stripAccents(raw).replace(/\s+/g, "").toUpperCase();
+  return clean.length > 0 ? clean : undefined;
+}
+
+/**
  * Normaliza un numero telefonico a formato E.164 basico (Mexico por defecto si son 10 digitos).
  */
 export function normalizePhone(raw: string): string {
@@ -31,7 +79,7 @@ export function normalizePhone(raw: string): string {
 export function hashIdentifier(value: string): string {
   return crypto
     .createHmac("sha256", env.PII_HASH_PEPPER)
-    .update(value.trim().toLowerCase())
+    .update(stripAccents(value).toLowerCase())
     .digest("hex");
 }
 

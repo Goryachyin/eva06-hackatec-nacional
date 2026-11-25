@@ -26,10 +26,13 @@ import {
   AdminUserLookupItem,
   CaseState,
   Channel,
+  ClinicItem,
   HealthResponse,
   JourneyEventItem,
   StaffUser,
+  StudyItem,
 } from "../types/api";
+import { TIME_SLOTS } from "../lib/bookingContext";
 
 interface LiveSseEvent {
   id: string;
@@ -77,21 +80,86 @@ export const AdminDashboard: React.FC = () => {
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [lookupResults, setLookupResults] = useState<AdminUserLookupItem[] | null>(null);
 
+  // Catálogo para edición administrativa de citas
+  const [studies, setStudies] = useState<StudyItem[]>([]);
+  const [clinics, setClinics] = useState<ClinicItem[]>([]);
+  const catalogLoadedRef = useRef(false);
+
+  // Estado de edición de cita (dentro del panel lateral de auditoría)
+  const [editingCase, setEditingCase] = useState(false);
+  const [editStudyCode, setEditStudyCode] = useState("");
+  const [editClinicId, setEditClinicId] = useState("");
+  const [editDate, setEditDate] = useState("");
+  const [editTime, setEditTime] = useState("09:30");
+  const [editPayment, setEditPayment] = useState<"online" | "oxxo" | "clinic">("online");
+  const [editState, setEditState] = useState<CaseState>("INICIADO");
+  const [editCancelled, setEditCancelled] = useState(false);
+  const [editAdminNotes, setEditAdminNotes] = useState("");
+  const [editCaseSaving, setEditCaseSaving] = useState(false);
+  const [editCaseFeedback, setEditCaseFeedback] = useState<string | null>(null);
+
+  // Estado de edición de cuenta de usuario (en pestaña Consultar usuario)
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [uFirstName, setUFirstName] = useState("");
+  const [uPaternal, setUPaternal] = useState("");
+  const [uMaternal, setUMaternal] = useState("");
+  const [uEmail, setUEmail] = useState("");
+  const [uPhone, setUPhone] = useState("");
+  const [uCurp, setUCurp] = useState("");
+  const [uBirthDate, setUBirthDate] = useState("");
+  const [uGender, setUGender] = useState<"" | "FEMENINO" | "MASCULINO">("");
+  const [uBirthState, setUBirthState] = useState("");
+  const [uCountry, setUCountry] = useState("MEXICO");
+  const [uNewPassword, setUNewPassword] = useState("");
+  const [editUserSaving, setEditUserSaving] = useState(false);
+  const [editUserFeedback, setEditUserFeedback] = useState<string | null>(null);
+
   const refreshTimerRef = useRef<number | null>(null);
+  const fetchSeqRef = useRef(0);
+  const inspectCaseIdRef = useRef<string | null>(null);
+  const activeTabRef = useRef<AdminTab>(activeTab);
+  const lookupQueryRef = useRef(lookupQuery);
+  const hasLookupResultsRef = useRef(false);
+
+  useEffect(() => {
+    inspectCaseIdRef.current = inspectCase?.id ?? null;
+  }, [inspectCase?.id]);
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+  useEffect(() => {
+    lookupQueryRef.current = lookupQuery;
+  }, [lookupQuery]);
+  useEffect(() => {
+    hasLookupResultsRef.current = lookupResults !== null;
+  }, [lookupResults]);
 
   const fetchOverview = useCallback(async () => {
     if (!token) return;
+    const seq = ++fetchSeqRef.current;
     setLoading(true);
     setError(null);
     try {
-      const [ov, hl] = await Promise.all([
+      const [ov, hl, cat] = await Promise.all([
         api.getAdminOverview(token),
         api.getHealth().catch(() => null),
+        catalogLoadedRef.current ? Promise.resolve(null) : api.getCatalog().catch(() => null),
       ]);
+      if (seq !== fetchSeqRef.current) return;
+      if (cat) {
+        catalogLoadedRef.current = true;
+        setStudies(cat.studies);
+        setClinics(cat.clinics);
+      }
       setOverview(ov);
+      setInspectCase((prev) => {
+        if (!prev) return null;
+        return ov.cases.find((item) => item.id === prev.id) ?? prev;
+      });
       if (hl) setHealth(hl);
       setLastUpdated(new Date().toISOString());
     } catch (err) {
+      if (seq !== fetchSeqRef.current) return;
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
         clearStaffSession("ADMIN");
         setToken(null);
@@ -101,7 +169,9 @@ export const AdminDashboard: React.FC = () => {
         setError(err instanceof Error ? err.message : "No se pudieron cargar las métricas.");
       }
     } finally {
-      setLoading(false);
+      if (seq === fetchSeqRef.current) {
+        setLoading(false);
+      }
     }
   }, [token]);
 
@@ -140,7 +210,24 @@ export const AdminDashboard: React.FC = () => {
         if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
         refreshTimerRef.current = window.setTimeout(() => {
           fetchOverview();
-        }, 350);
+          const openCaseId = inspectCaseIdRef.current;
+          if (openCaseId && (!item.caseId || item.caseId === openCaseId)) {
+            api
+              .getCaseTimeline(token, openCaseId)
+              .then((res) => setTimelineEvents(res.events))
+              .catch(() => {});
+          }
+          if (
+            activeTabRef.current === "user-lookup" &&
+            hasLookupResultsRef.current &&
+            lookupQueryRef.current.trim()
+          ) {
+            api
+              .lookupAdminUsers(token, lookupQueryRef.current.trim())
+              .then((res) => setLookupResults(res.results))
+              .catch(() => {});
+          }
+        }, 280);
       } catch {
         // Ignorar trama malformada
       }
@@ -185,9 +272,23 @@ export const AdminDashboard: React.FC = () => {
     setLookupResults(null);
   };
 
-  const openTimeline = async (c: AdminSanitizedCase) => {
+  const populateCaseEditor = (c: AdminSanitizedCase) => {
+    setEditStudyCode(c.contextSummary.study?.code || studies[0]?.code || "");
+    setEditClinicId(c.contextSummary.clinic?.id || clinics[0]?.id || "");
+    setEditDate(c.contextSummary.preferred_slot?.date || new Date().toISOString().slice(0, 10));
+    setEditTime(c.contextSummary.preferred_slot?.time || "09:30");
+    setEditPayment(c.contextSummary.payment_method || "online");
+    setEditState(c.currentState);
+    setEditCancelled(Boolean(c.contextSummary.cancelled));
+    setEditAdminNotes("");
+    setEditCaseFeedback(null);
+  };
+
+  const openTimeline = async (c: AdminSanitizedCase, startEditing = false) => {
     if (!token) return;
     setInspectCase(c);
+    populateCaseEditor(c);
+    setEditingCase(startEditing);
     setTimelineLoading(true);
     setTimelineEvents([]);
     try {
@@ -197,6 +298,88 @@ export const AdminDashboard: React.FC = () => {
       setError(err instanceof Error ? err.message : "Error al cargar la línea de tiempo.");
     } finally {
       setTimelineLoading(false);
+    }
+  };
+
+  const handleSaveAdminCaseEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !inspectCase) return;
+    setEditCaseSaving(true);
+    setEditCaseFeedback(null);
+    try {
+      await api.updateAdminCase(token, inspectCase.id, {
+        expectedVersion: inspectCase.version,
+        ...(editStudyCode ? { studyCode: editStudyCode } : {}),
+        ...(editClinicId ? { clinicId: editClinicId } : {}),
+        preferredDate: editDate,
+        preferredTime: editTime,
+        paymentMethod: editPayment,
+        nextState: editState,
+        cancelled: editCancelled,
+        adminNotes: editAdminNotes.trim() || undefined,
+      });
+      await fetchOverview();
+      const tl = await api.getCaseTimeline(token, inspectCase.id);
+      setTimelineEvents(tl.events);
+      if (lookupQueryRef.current.trim() && hasLookupResultsRef.current) {
+        const lk = await api.lookupAdminUsers(token, lookupQueryRef.current.trim());
+        setLookupResults(lk.results);
+      }
+      setEditingCase(false);
+      setEditCaseFeedback("Cita actualizada y sincronizada en todos los canales.");
+    } catch (err) {
+      setEditCaseFeedback(err instanceof Error ? err.message : "No se pudo actualizar la cita.");
+    } finally {
+      setEditCaseSaving(false);
+    }
+  };
+
+  const startEditingUser = (u: AdminUserLookupItem) => {
+    setEditingUserId(u.patientId);
+    setUFirstName(u.firstName || "");
+    setUPaternal(u.paternalLastName || "");
+    setUMaternal(u.maternalLastName || "");
+    setUEmail(u.email || "");
+    setUPhone(u.phone || "");
+    setUCurp(u.curp || "");
+    setUBirthDate(u.birthDate || "");
+    setUGender(u.gender === "FEMENINO" || u.gender === "MASCULINO" ? u.gender : "");
+    setUBirthState(u.birthState || "");
+    setUCountry(u.country || "MEXICO");
+    setUNewPassword("");
+    setEditUserFeedback(null);
+  };
+
+  const handleSaveAdminUserEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !editingUserId) return;
+    setEditUserSaving(true);
+    setEditUserFeedback(null);
+    try {
+      await api.updateAdminUser(token, editingUserId, {
+        ...(uFirstName.trim() ? { firstName: uFirstName.trim() } : {}),
+        ...(uPaternal.trim() ? { paternalLastName: uPaternal.trim() } : {}),
+        maternalLastName: uMaternal.trim() || null,
+        email: uEmail.trim() || null,
+        phone: uPhone.trim() || null,
+        curp: uCurp.trim() || null,
+        birthDate: uBirthDate.trim() || null,
+        gender: uGender || null,
+        birthState: uBirthState.trim() || null,
+        country: uCountry.trim() || "MEXICO",
+        ...(uNewPassword.trim().length >= 6 ? { newPassword: uNewPassword.trim() } : {}),
+      });
+      if (lookupQuery.trim()) {
+        const res = await api.lookupAdminUsers(token, lookupQuery.trim());
+        setLookupResults(res.results);
+      }
+      await fetchOverview();
+      setEditingUserId(null);
+      setEditUserFeedback("Cuenta del usuario actualizada y normalizada en todos los canales.");
+    } catch (err) {
+      setEditUserFeedback(err instanceof Error ? err.message : "No se pudo actualizar la cuenta.");
+    } finally {
+      setEditUserSaving(false);
     }
   };
 
@@ -864,9 +1047,17 @@ export const AdminDashboard: React.FC = () => {
             </p>
           )}
 
+          {editUserFeedback && (
+            <p className="border-l-2 border-[#00875A] pl-4 py-1 text-sm text-[#00875A]">
+              {editUserFeedback}
+            </p>
+          )}
+
           {lookupResults && lookupResults.length > 0 && (
             <ul className="divide-y divide-[#E4E7EB]">
-              {lookupResults.map((item) => (
+              {lookupResults.map((item) => {
+                const isEditingThisUser = editingUserId === item.patientId;
+                return (
                 <li key={item.patientId} className="py-8 space-y-6">
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                     <div>
@@ -876,6 +1067,15 @@ export const AdminDashboard: React.FC = () => {
                         {item.birthState ? ` · ${item.birthState}` : ""} ·{" "}
                         {item.hasAccount ? "Cuenta registrada" : "Sin contraseña web"}
                       </p>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          isEditingThisUser ? setEditingUserId(null) : startEditingUser(item)
+                        }
+                        className="mt-2 px-3 py-1 border border-[#00875A] text-xs font-semibold text-[#00875A] hover:bg-[#00875A] hover:text-[#FFFFFF] transition-colors"
+                      >
+                        {isEditingThisUser ? "Cancelar edición de cuenta" : "Editar cuenta"}
+                      </button>
                     </div>
 
                     <ul className="text-xs font-mono text-[#52606D] space-y-1">
@@ -889,6 +1089,166 @@ export const AdminDashboard: React.FC = () => {
                       ))}
                     </ul>
                   </div>
+
+                  {isEditingThisUser && (
+                    <form
+                      onSubmit={handleSaveAdminUserEdit}
+                      className="bg-[#F7F8F9] border border-[#E4E7EB] p-5 space-y-4"
+                    >
+                      <div>
+                        <h4 className="text-sm font-bold text-[#1F2933]">
+                          Editar cuenta del paciente (normalización automática sin acentos)
+                        </h4>
+                        <p className="text-xs text-[#52606D] mt-0.5">
+                          Nombres/apellidos y CURP se normalizan en mayúsculas sin acentos; correo
+                          en minúsculas para mantener la vinculación omnicanal.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                            Nombre(s)
+                          </label>
+                          <input
+                            type="text"
+                            value={uFirstName}
+                            onChange={(e) => setUFirstName(e.target.value)}
+                            className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                            Apellido paterno
+                          </label>
+                          <input
+                            type="text"
+                            value={uPaternal}
+                            onChange={(e) => setUPaternal(e.target.value)}
+                            className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                            Apellido materno
+                          </label>
+                          <input
+                            type="text"
+                            value={uMaternal}
+                            onChange={(e) => setUMaternal(e.target.value)}
+                            className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                            Correo electrónico
+                          </label>
+                          <input
+                            type="email"
+                            value={uEmail}
+                            onChange={(e) => setUEmail(e.target.value)}
+                            className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                            Teléfono
+                          </label>
+                          <input
+                            type="tel"
+                            value={uPhone}
+                            onChange={(e) => setUPhone(e.target.value)}
+                            className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                            CURP (18 caracteres)
+                          </label>
+                          <input
+                            type="text"
+                            maxLength={18}
+                            value={uCurp}
+                            onChange={(e) => setUCurp(e.target.value.toUpperCase())}
+                            className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs font-mono text-[#1F2933] focus:border-[#00875A]"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                            Fecha nacimiento
+                          </label>
+                          <input
+                            type="date"
+                            value={uBirthDate}
+                            onChange={(e) => setUBirthDate(e.target.value)}
+                            className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                            Género
+                          </label>
+                          <select
+                            value={uGender}
+                            onChange={(e) =>
+                              setUGender(e.target.value as "" | "FEMENINO" | "MASCULINO")
+                            }
+                            className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                          >
+                            <option value="">Sin especificar</option>
+                            <option value="FEMENINO">Mujer</option>
+                            <option value="MASCULINO">Hombre</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                            Estado nacimiento
+                          </label>
+                          <input
+                            type="text"
+                            value={uBirthState}
+                            onChange={(e) => setUBirthState(e.target.value)}
+                            className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                            Nueva contraseña (opcional)
+                          </label>
+                          <input
+                            type="password"
+                            value={uNewPassword}
+                            onChange={(e) => setUNewPassword(e.target.value)}
+                            placeholder="Mín. 6 caracteres"
+                            className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setEditingUserId(null)}
+                          className="h-9 px-4 border border-[#E4E7EB] bg-[#FFFFFF] text-xs font-semibold text-[#1F2933]"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={editUserSaving}
+                          className="h-9 px-5 bg-[#00875A] hover:bg-[#006B47] text-[#FFFFFF] text-xs font-semibold transition-colors disabled:opacity-50"
+                        >
+                          {editUserSaving ? "Guardando..." : "Guardar cambios de cuenta"}
+                        </button>
+                      </div>
+                    </form>
+                  )}
 
                   {item.cases.length === 0 ? (
                     <p className="text-sm text-[#52606D]">
@@ -908,9 +1268,36 @@ export const AdminDashboard: React.FC = () => {
                                 ? ` · Folio ${sc.contextSummary.appointment_folio}`
                                 : ""}
                             </h4>
-                            <code className="font-mono text-[#52606D]">
-                              journey_id: {sc.journeyId} · v{sc.version}
-                            </code>
+                            <div className="flex items-center gap-3">
+                              <code className="font-mono text-[#52606D]">
+                                journey_id: {sc.journeyId} · v{sc.version}
+                              </code>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const match = overview?.cases.find((x) => x.id === sc.id);
+                                  openTimeline(
+                                    match || {
+                                      id: sc.id,
+                                      patientId: item.patientId,
+                                      journeyId: sc.journeyId,
+                                      patientMasked: item.patientMasked,
+                                      identities: item.identities,
+                                      currentState: sc.currentState,
+                                      currentChannel: sc.currentChannel,
+                                      version: sc.version,
+                                      eventsCount: sc.events.length,
+                                      contextSummary: sc.contextSummary,
+                                      updatedAt: sc.updatedAt,
+                                    },
+                                    true
+                                  );
+                                }}
+                                className="text-xs font-semibold text-[#00875A] hover:underline"
+                              >
+                                Editar cita →
+                              </button>
+                            </div>
                           </div>
 
                           <OrderJourneyTracker
@@ -935,7 +1322,8 @@ export const AdminDashboard: React.FC = () => {
                     </div>
                   )}
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </div>
@@ -966,16 +1354,186 @@ export const AdminDashboard: React.FC = () => {
                   journey_id: {inspectCase.journeyId}
                 </code>
               </div>
-              <button
-                type="button"
-                onClick={() => setInspectCase(null)}
-                className="px-3 py-1.5 border border-[#E4E7EB] bg-[#FFFFFF] text-xs font-semibold text-[#1F2933] hover:border-[#1F2933]"
-              >
-                Cerrar
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!editingCase) populateCaseEditor(inspectCase);
+                    setEditingCase((v) => !v);
+                  }}
+                  className="px-3 py-1.5 border border-[#00875A] bg-[#FFFFFF] text-xs font-semibold text-[#00875A] hover:bg-[#00875A] hover:text-[#FFFFFF] transition-colors"
+                >
+                  {editingCase ? "Cancelar edición" : "Editar cita"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingCase(false);
+                    setInspectCase(null);
+                  }}
+                  className="px-3 py-1.5 border border-[#E4E7EB] bg-[#FFFFFF] text-xs font-semibold text-[#1F2933] hover:border-[#1F2933]"
+                >
+                  Cerrar
+                </button>
+              </div>
             </header>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {editCaseFeedback && (
+                <p className="border-l-2 border-[#00875A] pl-4 py-1 text-xs text-[#00875A]">
+                  {editCaseFeedback}
+                </p>
+              )}
+
+              {editingCase && (
+                <form
+                  onSubmit={handleSaveAdminCaseEdit}
+                  className="bg-[#F7F8F9] border border-[#E4E7EB] p-4 space-y-4"
+                >
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-[#00875A]">
+                    Edición administrativa de la cita (v{inspectCase.version})
+                  </h4>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                        Estudio
+                      </label>
+                      <select
+                        value={editStudyCode}
+                        onChange={(e) => setEditStudyCode(e.target.value)}
+                        className="w-full h-9 border border-[#E4E7EB] bg-[#FFFFFF] px-2.5 text-xs text-[#1F2933] focus:border-[#00875A]"
+                      >
+                        {studies.map((st) => (
+                          <option key={st.code} value={st.code}>
+                            {st.name} ({formatMoney(st.price)})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                        Clínica
+                      </label>
+                      <select
+                        value={editClinicId}
+                        onChange={(e) => setEditClinicId(e.target.value)}
+                        className="w-full h-9 border border-[#E4E7EB] bg-[#FFFFFF] px-2.5 text-xs text-[#1F2933] focus:border-[#00875A]"
+                      >
+                        {clinics.map((cl) => (
+                          <option key={cl.id} value={cl.id}>
+                            {cl.name} · {cl.city}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                        Fecha
+                      </label>
+                      <input
+                        type="date"
+                        value={editDate}
+                        onChange={(e) => setEditDate(e.target.value)}
+                        className="w-full h-9 border border-[#E4E7EB] bg-[#FFFFFF] px-2.5 text-xs text-[#1F2933] focus:border-[#00875A]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                        Horario
+                      </label>
+                      <select
+                        value={editTime}
+                        onChange={(e) => setEditTime(e.target.value)}
+                        className="w-full h-9 border border-[#E4E7EB] bg-[#FFFFFF] px-2.5 text-xs text-[#1F2933] focus:border-[#00875A]"
+                      >
+                        {TIME_SLOTS.map((slot) => (
+                          <option key={slot} value={slot}>
+                            {slot} hrs
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                        Forma de pago
+                      </label>
+                      <select
+                        value={editPayment}
+                        onChange={(e) =>
+                          setEditPayment(e.target.value as "online" | "oxxo" | "clinic")
+                        }
+                        className="w-full h-9 border border-[#E4E7EB] bg-[#FFFFFF] px-2.5 text-xs text-[#1F2933] focus:border-[#00875A]"
+                      >
+                        <option value="online">Pago en línea (-10%)</option>
+                        <option value="oxxo">OXXO Pay</option>
+                        <option value="clinic">En clínica</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                        Estado canónico
+                      </label>
+                      <select
+                        value={editState}
+                        onChange={(e) => setEditState(e.target.value as CaseState)}
+                        className="w-full h-9 border border-[#E4E7EB] bg-[#FFFFFF] px-2.5 text-xs text-[#1F2933] focus:border-[#00875A]"
+                      >
+                        {CANONICAL_STATES.map((st) => (
+                          <option key={st} value={st}>
+                            {STATE_META[st].label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-[#1F2933] mb-1">
+                        Notas administrativas
+                      </label>
+                      <input
+                        type="text"
+                        value={editAdminNotes}
+                        onChange={(e) => setEditAdminNotes(e.target.value)}
+                        placeholder="Motivo del ajuste..."
+                        className="w-full h-9 border border-[#E4E7EB] bg-[#FFFFFF] px-2.5 text-xs text-[#1F2933] focus:border-[#00875A]"
+                      />
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-2 text-xs text-[#1F2933] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editCancelled}
+                      onChange={(e) => setEditCancelled(e.target.checked)}
+                      className="w-4 h-4 accent-[#00875A]"
+                    />
+                    Marcar trámite como anulado (se oculta de trámites pendientes del bot)
+                  </label>
+
+                  <div className="flex justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setEditingCase(false)}
+                      className="h-9 px-3.5 border border-[#E4E7EB] bg-[#FFFFFF] text-xs font-semibold text-[#1F2933]"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={editCaseSaving}
+                      className="h-9 px-4 bg-[#00875A] hover:bg-[#006B47] text-[#FFFFFF] text-xs font-semibold transition-colors disabled:opacity-50"
+                    >
+                      {editCaseSaving ? "Guardando..." : "Guardar cambios"}
+                    </button>
+                  </div>
+                </form>
+              )}
               <OrderJourneyTracker
                 currentState={inspectCase.currentState}
                 currentChannel={inspectCase.currentChannel}

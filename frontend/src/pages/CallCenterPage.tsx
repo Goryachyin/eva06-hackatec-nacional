@@ -19,10 +19,8 @@ import {
   getDefaultTomorrowIso,
   getPreparationSteps,
   inferResumeStep,
-  normalizedPhoneForSubmit,
   parseCurpMetadata,
   PaymentMethod,
-  RELATIONSHIP_OPTIONS,
   saveBookingDraft,
   TIME_SLOTS,
   WizardStep,
@@ -35,14 +33,8 @@ import {
   formatTimeShort,
   STATE_META,
 } from "../lib/constants";
-import { generateDeterministicCurp, MEXICAN_STATES } from "../lib/curp";
-import {
-  CallCenterCaseItem,
-  ClinicItem,
-  RelationshipType,
-  StaffUser,
-  StudyItem,
-} from "../types/api";
+import { MEXICAN_STATES } from "../lib/curp";
+import { CallCenterCaseItem, ClinicItem, StaffUser, StudyItem } from "../types/api";
 
 function getPatientDisplayName(c: CallCenterCaseItem): string {
   const full = [c.patient.firstName, c.patient.paternalLastName, c.patient.maternalLastName]
@@ -55,20 +47,34 @@ function getPatientDisplayName(c: CallCenterCaseItem): string {
 }
 
 function getCaseResumeStepLabel(c: CallCenterCaseItem): string {
-  const draft = getBookingDraft(c.id);
-  const hasCompleteProfile =
-    Boolean(c.patient.firstName?.trim()) &&
-    Boolean(c.patient.paternalLastName?.trim()) &&
-    (c.patient.curp?.trim().length ?? 0) === 18 &&
-    (c.patient.phone?.replace(/\D/g, "").length ?? 0) >= 10;
-
   if (c.currentState === "CITA_CONFIRMADA" || c.contextJson.appointment_folio) {
     return "Cita confirmada";
   }
+
+  const draft = getBookingDraft(c.id);
+  const hasStudy = Boolean(c.contextJson.study?.code);
+  const hasClinic = Boolean(c.contextJson.clinic?.id);
+
+  if (!hasStudy) {
+    return "Paso 01 · Estudio";
+  }
+  if (!hasClinic) {
+    return "Paso 01 · Clínica";
+  }
+
+  const hasBasicName =
+    Boolean(c.patient.firstName?.trim()) && Boolean(c.patient.paternalLastName?.trim());
+  const hasFullWebProfile =
+    hasBasicName &&
+    (c.patient.curp?.trim().length ?? 0) === 18 &&
+    (c.patient.phone?.replace(/\D/g, "").length ?? 0) >= 10;
+  const hasCompleteProfile =
+    hasFullWebProfile || (hasBasicName && Boolean(c.contextJson.payment_method));
+
   const s = inferResumeStep({
     currentState: c.currentState,
-    hasStudy: Boolean(c.contextJson.study?.code),
-    hasClinic: Boolean(c.contextJson.clinic?.id),
+    hasStudy,
+    hasClinic,
     hasCompleteProfile,
     hasFolio: Boolean(c.contextJson.appointment_folio),
     draft,
@@ -90,7 +96,7 @@ export const CallCenterPage: React.FC = () => {
   const [clinics, setClinics] = useState<ClinicItem[]>([]);
   const [cases, setCases] = useState<CallCenterCaseItem[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
-  const [creatingNewBooking, setCreatingNewBooking] = useState(false);
+  const [editingConfirmed, setEditingConfirmed] = useState(false);
 
   // Filtros por usuario y estado
   const [userSearchQuery, setUserSearchQuery] = useState("");
@@ -105,7 +111,7 @@ export const CallCenterPage: React.FC = () => {
   const [sseConnected, setSseConnected] = useState(false);
   const [screenPopNotice, setScreenPopNotice] = useState<string | null>(null);
 
-  // Flujo de 3 pasos (misma lógica que LaboratorioPage)
+  // Flujo de 3 pasos (Call Center solo modifica datos de la cita; perfil en solo lectura)
   const [step, setStep] = useState<WizardStep>(1);
   const [selectedCategory, setSelectedCategory] = useState<string>("Todos");
   const [studyQuery, setStudyQuery] = useState<string>("");
@@ -114,10 +120,7 @@ export const CallCenterPage: React.FC = () => {
   const [preferredDate, setPreferredDate] = useState<string>(getDefaultTomorrowIso);
   const [preferredTime, setPreferredTime] = useState<string>("09:30");
 
-  // Paso 2: Pre-registro del paciente (y soporte multibeneficiario)
-  const [forThirdParty, setForThirdParty] = useState<boolean>(false);
-  const [relationship, setRelationship] = useState<RelationshipType>("HIJO_A");
-  const [thirdPartyConsent, setThirdPartyConsent] = useState<boolean>(false);
+  // Paso 2: Datos del paciente (solo lectura en Call Center)
   const [nombres, setNombres] = useState("");
   const [apellidoPaterno, setApellidoPaterno] = useState("");
   const [apellidoMaterno, setApellidoMaterno] = useState("");
@@ -126,7 +129,6 @@ export const CallCenterPage: React.FC = () => {
   const [estadoNacimientoCode, setEstadoNacimientoCode] = useState("");
   const [pais, setPais] = useState("MÉXICO");
   const [curp, setCurp] = useState("");
-  const [curpManuallyEdited, setCurpManuallyEdited] = useState(false);
   const [telefono, setTelefono] = useState("");
   const [caseWebSessionId, setCaseWebSessionId] = useState<string | undefined>(undefined);
 
@@ -134,37 +136,62 @@ export const CallCenterPage: React.FC = () => {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("online");
   const [advisorNotes, setAdvisorNotes] = useState("");
 
-  const dateInputRef = useRef<HTMLInputElement | null>(null);
   const hydratedCaseKeyRef = useRef<string | null>(null);
+  const studiesCountRef = useRef(0);
+  const selectedStudyCodeRef = useRef(selectedStudyCode);
+  const selectedClinicIdRef = useRef(selectedClinicId);
+  const selectedUserFilterRef = useRef(selectedUserFilter);
+  const selectedCaseIdRef = useRef(selectedCaseId);
+  const fetchSeqRef = useRef(0);
+  const sseRefreshTimerRef = useRef<number | null>(null);
+  const screenPopTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    studiesCountRef.current = studies.length;
+  }, [studies.length]);
+  useEffect(() => {
+    selectedStudyCodeRef.current = selectedStudyCode;
+  }, [selectedStudyCode]);
+  useEffect(() => {
+    selectedClinicIdRef.current = selectedClinicId;
+  }, [selectedClinicId]);
+  useEffect(() => {
+    selectedUserFilterRef.current = selectedUserFilter;
+  }, [selectedUserFilter]);
+  useEffect(() => {
+    selectedCaseIdRef.current = selectedCaseId;
+  }, [selectedCaseId]);
 
   const fetchCatalogAndQueue = useCallback(async () => {
     if (!token) return;
+    const seq = ++fetchSeqRef.current;
     setLoading(true);
     try {
       const [queueRes, catRes] = await Promise.all([
         api.getCallCenterQueue(token),
-        studies.length === 0 ? api.getCatalog() : Promise.resolve(null),
+        studiesCountRef.current === 0 ? api.getCatalog() : Promise.resolve(null),
       ]);
+      if (seq !== fetchSeqRef.current) return;
+
       const list = queueRes.cases || [];
       setCases(list);
       if (catRes) {
         setStudies(catRes.studies);
         setClinics(catRes.clinics);
-        if (catRes.studies.length > 0 && !selectedStudyCode) {
+        if (catRes.studies.length > 0 && !selectedStudyCodeRef.current) {
           setSelectedStudyCode(catRes.studies[0].code);
         }
-        if (catRes.clinics.length > 0 && !selectedClinicId) {
+        if (catRes.clinics.length > 0 && !selectedClinicIdRef.current) {
           setSelectedClinicId(catRes.clinics[0].id);
         }
       }
       setError(null);
-      if (!creatingNewBooking) {
-        setSelectedCaseId((prev) => {
-          if (prev && list.some((c) => c.id === prev)) return prev;
-          return list[0]?.id ?? null;
-        });
-      }
+      setSelectedCaseId((prev) => {
+        if (prev && list.some((c) => c.id === prev)) return prev;
+        return list[0]?.id ?? null;
+      });
     } catch (err) {
+      if (seq !== fetchSeqRef.current) return;
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
         clearStaffSession("ASESOR");
         setToken(null);
@@ -174,15 +201,17 @@ export const CallCenterPage: React.FC = () => {
         setError(err instanceof Error ? err.message : "No se pudo cargar la bandeja.");
       }
     } finally {
-      setLoading(false);
+      if (seq === fetchSeqRef.current) {
+        setLoading(false);
+      }
     }
-  }, [token, studies.length, selectedStudyCode, selectedClinicId, creatingNewBooking]);
+  }, [token]);
 
   useEffect(() => {
     if (token) fetchCatalogAndQueue();
   }, [token, fetchCatalogAndQueue]);
 
-  // SSE en tiempo real para recibir cambios desde Sitio Web o WhatsApp al instante
+  // SSE en tiempo real estable (no se reconecta al hidratar casos ni cambiar selección)
   useEffect(() => {
     if (!token) {
       setSseConnected(false);
@@ -202,19 +231,33 @@ export const CallCenterPage: React.FC = () => {
         setScreenPopNotice(
           `Screen-Pop en vivo: ${data.eventType || "EVENTO"} (${data.channel || "SISTEMA"})`
         );
-        if (data.caseId && !creatingNewBooking) {
+        if (
+          data.caseId &&
+          (selectedUserFilterRef.current === "ALL" ||
+            selectedCaseIdRef.current === data.caseId ||
+            !selectedCaseIdRef.current)
+        ) {
           hydratedCaseKeyRef.current = null;
           setSelectedCaseId(data.caseId);
         }
-        fetchCatalogAndQueue();
-        window.setTimeout(() => setScreenPopNotice(null), 5000);
+        if (sseRefreshTimerRef.current) window.clearTimeout(sseRefreshTimerRef.current);
+        sseRefreshTimerRef.current = window.setTimeout(() => {
+          fetchCatalogAndQueue();
+        }, 220);
+
+        if (screenPopTimerRef.current) window.clearTimeout(screenPopTimerRef.current);
+        screenPopTimerRef.current = window.setTimeout(() => setScreenPopNotice(null), 5000);
       } catch {
         // Ignorar trama no JSON
       }
     });
     es.onerror = () => setSseConnected(false);
-    return () => es.close();
-  }, [token, fetchCatalogAndQueue, creatingNewBooking]);
+    return () => {
+      es.close();
+      if (sseRefreshTimerRef.current) window.clearTimeout(sseRefreshTimerRef.current);
+      if (screenPopTimerRef.current) window.clearTimeout(screenPopTimerRef.current);
+    };
+  }, [token, fetchCatalogAndQueue]);
 
   // Usuarios únicos para el filtro de usuario en Call Center
   const uniqueUsers = useMemo(() => {
@@ -261,8 +304,8 @@ export const CallCenterPage: React.FC = () => {
   }, [cases, selectedUserFilter, statusFilter, userSearchQuery]);
 
   const selectedCase = useMemo(
-    () => (creatingNewBooking ? null : cases.find((c) => c.id === selectedCaseId) || null),
-    [cases, selectedCaseId, creatingNewBooking]
+    () => cases.find((c) => c.id === selectedCaseId) || null,
+    [cases, selectedCaseId]
   );
 
   // Hidratar los 3 apartados exactamente desde donde se quedó el usuario en Web/WhatsApp
@@ -289,17 +332,19 @@ export const CallCenterPage: React.FC = () => {
         draft?.estadoNacimientoCode ||
         parsedCurp.estadoNacimientoCode ||
         "";
-      const nextBirthDate = draft?.fechaNacimiento || parsedCurp.fechaNacimiento || "";
-      const nextGenero = draft?.genero || parsedCurp.genero || "";
+      const patientBirthDateIso = c.patient.birthDate ? c.patient.birthDate.slice(0, 10) : "";
+      const nextBirthDate =
+        patientBirthDateIso || draft?.fechaNacimiento || parsedCurp.fechaNacimiento || "";
+      const patientGender: "FEMENINO" | "MASCULINO" | "" =
+        c.patient.gender === "FEMENINO" || c.patient.gender === "MASCULINO"
+          ? c.patient.gender
+          : "";
+      const nextGenero = patientGender || draft?.genero || parsedCurp.genero || "";
 
       setSelectedStudyCode(nextStudyCode);
       setSelectedClinicId(nextClinicId);
       setPreferredDate(nextDate);
       setPreferredTime(nextTime);
-
-      setForThirdParty(Boolean(draft?.forThirdParty));
-      setRelationship(draft?.relationship || "HIJO_A");
-      setThirdPartyConsent(Boolean(draft?.thirdPartyConsent));
 
       setNombres(nextNombres);
       setApellidoPaterno(nextPaterno);
@@ -309,19 +354,21 @@ export const CallCenterPage: React.FC = () => {
       setEstadoNacimientoCode(nextBirthStateCode);
       setPais(draft?.pais || "MÉXICO");
       setCurp(curpVal);
-      setCurpManuallyEdited(Boolean(curpVal));
       setTelefono(nextPhone);
       setCaseWebSessionId(draft?.webSessionId);
-      setPaymentMethod(draft?.paymentMethod || "online");
+      setPaymentMethod(c.contextJson.payment_method || draft?.paymentMethod || "online");
       setAdvisorNotes(draft?.advisorNotes || "");
+      setEditingConfirmed(false);
       setNotice(null);
       setError(null);
 
-      const hasCompleteProfile =
-        nextNombres.trim().length >= 2 &&
-        nextPaterno.trim().length >= 2 &&
+      const hasBasicName = nextNombres.trim().length >= 2 && nextPaterno.trim().length >= 2;
+      const hasFullWebProfile =
+        hasBasicName &&
         curpVal.trim().length === 18 &&
         nextPhone.replace(/\D/g, "").length >= 10;
+      const hasCompleteProfile =
+        hasFullWebProfile || (hasBasicName && Boolean(c.contextJson.payment_method));
 
       const resumedStep = inferResumeStep({
         currentState: c.currentState,
@@ -338,7 +385,19 @@ export const CallCenterPage: React.FC = () => {
 
   useEffect(() => {
     if (!selectedCase) return;
-    const key = `${selectedCase.id}:${selectedCase.version}`;
+    const key = [
+      selectedCase.id,
+      selectedCase.version,
+      selectedCase.updatedAt,
+      selectedCase.currentState,
+      selectedCase.patient.firstName ?? "",
+      selectedCase.patient.paternalLastName ?? "",
+      selectedCase.patient.phone ?? "",
+      selectedCase.contextJson.study?.code ?? "",
+      selectedCase.contextJson.clinic?.id ?? "",
+      selectedCase.contextJson.payment_method ?? "",
+      selectedCase.contextJson.appointment_folio ?? "",
+    ].join(":");
     if (hydratedCaseKeyRef.current === key) return;
     hydratedCaseKeyRef.current = key;
     hydrateWorkspaceFromCase(selectedCase);
@@ -355,63 +414,6 @@ export const CallCenterPage: React.FC = () => {
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, [selectedCase, hydrateWorkspaceFromCase]);
-
-  // Autogeneración determinística de CURP (igual que LaboratorioPage)
-  useEffect(() => {
-    if (curpManuallyEdited) return;
-    if (!estadoNacimientoCode) {
-      setCurp("");
-      return;
-    }
-    const generated = generateDeterministicCurp({
-      nombres,
-      apellidoPaterno,
-      apellidoMaterno,
-      fechaNacimiento,
-      genero,
-      estadoCode: estadoNacimientoCode,
-    });
-    if (generated) setCurp(generated);
-  }, [
-    nombres,
-    apellidoPaterno,
-    apellidoMaterno,
-    fechaNacimiento,
-    genero,
-    estadoNacimientoCode,
-    curpManuallyEdited,
-  ]);
-
-  const startNewPhoneBooking = () => {
-    setCreatingNewBooking(true);
-    setSelectedCaseId(null);
-    hydratedCaseKeyRef.current = null;
-    setStep(1);
-    setSelectedCategory("Todos");
-    setStudyQuery("");
-    if (studies.length > 0) setSelectedStudyCode(studies[0].code);
-    if (clinics.length > 0) setSelectedClinicId(clinics[0].id);
-    setPreferredDate(getDefaultTomorrowIso());
-    setPreferredTime("09:30");
-    setForThirdParty(false);
-    setRelationship("HIJO_A");
-    setThirdPartyConsent(false);
-    setNombres("");
-    setApellidoPaterno("");
-    setApellidoMaterno("");
-    setFechaNacimiento("");
-    setGenero("");
-    setEstadoNacimientoCode("");
-    setPais("MÉXICO");
-    setCurp("");
-    setCurpManuallyEdited(false);
-    setTelefono("");
-    setCaseWebSessionId(undefined);
-    setPaymentMethod("online");
-    setAdvisorNotes("");
-    setNotice(null);
-    setError(null);
-  };
 
   const categories = useMemo(() => {
     const unique = Array.from(new Set(studies.map((s) => s.category)));
@@ -441,33 +443,6 @@ export const CallCenterPage: React.FC = () => {
     () => clinics.find((c) => c.id === selectedClinicId) || null,
     [clinics, selectedClinicId]
   );
-
-  const isProfileValid = useMemo(() => {
-    const cleanPhoneDigits = telefono.replace(/\D/g, "");
-    const baseOk =
-      nombres.trim().length >= 2 &&
-      apellidoPaterno.trim().length >= 2 &&
-      fechaNacimiento.length === 10 &&
-      (genero === "FEMENINO" || genero === "MASCULINO") &&
-      estadoNacimientoCode.length === 2 &&
-      pais.trim().length > 0 &&
-      curp.trim().length === 18 &&
-      cleanPhoneDigits.length >= 10;
-    if (!baseOk) return false;
-    if (forThirdParty && !thirdPartyConsent) return false;
-    return true;
-  }, [
-    nombres,
-    apellidoPaterno,
-    fechaNacimiento,
-    genero,
-    estadoNacimientoCode,
-    pais,
-    curp,
-    telefono,
-    forThirdParty,
-    thirdPartyConsent,
-  ]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -502,270 +477,126 @@ export const CallCenterPage: React.FC = () => {
     }
   };
 
-  // Paso 1 -> Paso 2 (guardando cambios en backend si existe caso activo)
+  // Paso 1: Modificar exclusivamente los datos de la cita (estudio, clínica, horario) sin alterar cuenta
   const handleStep1Continue = async (pauseAfter = false) => {
-    if (!selectedStudy || !selectedClinic) return;
-    if (!selectedCase && !pauseAfter) {
-      setStep(2);
-      return;
-    }
+    if (!token || !selectedCase || !selectedStudy || !selectedClinic) return;
 
     setActionLoading(true);
     setError(null);
     setNotice(null);
 
     try {
-      const rawPhone = telefono || selectedCase?.patient.phone || "";
-      const validPhone =
-        rawPhone.replace(/\D/g, "").length >= 10 ? normalizedPhoneForSubmit(rawPhone) : undefined;
-      const rawCurp = curp || selectedCase?.patient.curp || "";
-      const validCurp = rawCurp.trim().length === 18 ? rawCurp.trim().toUpperCase() : undefined;
-
-      const quoteRes = await api.quoteWebStudy({
-        caseId: selectedCase?.id,
-        expectedVersion: selectedCase?.version,
-        ...(caseWebSessionId ? { webSessionId: caseWebSessionId } : {}),
-        ...(validPhone ? { telefono: validPhone } : {}),
-        ...(validCurp ? { curp: validCurp } : {}),
-        ...(nombres.trim() ? { nombres: nombres.trim() } : {}),
-        ...(apellidoPaterno.trim() ? { apellido_paterno: apellidoPaterno.trim() } : {}),
+      const res = await api.updateCallCenterCase(token, selectedCase.id, {
+        expectedVersion: selectedCase.version,
         studyCode: selectedStudy.code,
         clinicId: selectedClinic.id,
-        preferredSlot: { date: preferredDate, time: preferredTime },
+        preferredDate,
+        preferredTime,
+        paymentMethod,
+        action: pauseAfter ? "pause" : "save",
       });
-
-      let latestCase = quoteRes.case;
-      if (token && !pauseAfter) {
-        const assigned = await api.assignCallCenterCase(token, latestCase.id, latestCase.version);
-        latestCase = assigned.case;
-      } else if (pauseAfter) {
-        const paused = await api.abandonWebCase({
-          caseId: latestCase.id,
-          expectedVersion: latestCase.version,
-          reason: "ADVISOR_SAVED_STEP_1_DRAFT",
-        });
-        latestCase = paused.case;
-      }
 
       const targetStep: WizardStep = pauseAfter ? 1 : 2;
       saveBookingDraft({
-        caseId: latestCase.id,
-        webSessionId: caseWebSessionId || quoteRes.webSessionId,
+        caseId: res.case.id,
+        webSessionId: caseWebSessionId,
         step: targetStep,
         selectedStudyCode: selectedStudy.code,
         selectedClinicId: selectedClinic.id,
         preferredDate,
         preferredTime,
-        forThirdParty,
-        relationship,
-        thirdPartyConsent,
-        nombres,
-        apellidoPaterno,
-        apellidoMaterno,
-        fechaNacimiento,
-        genero,
-        estadoNacimientoCode,
-        pais,
-        curp,
-        telefono,
         paymentMethod,
         advisorNotes,
         updatedAt: new Date().toISOString(),
         updatedByChannel: "CALL_CENTER",
       });
 
-      setCreatingNewBooking(false);
-      setSelectedCaseId(latestCase.id);
-      hydratedCaseKeyRef.current = `${latestCase.id}:${latestCase.version}`;
+      hydratedCaseKeyRef.current = null;
       await fetchCatalogAndQueue();
 
       if (pauseAfter) {
-        setNotice("Avance guardado en Paso 01. El paciente puede continuarlo en Web o WhatsApp.");
+        setNotice("Cita pausada y sincronizada. El paciente puede retomarla en Web o WhatsApp.");
       } else {
         setStep(2);
+        setNotice("Estudio, clínica y horario actualizados en la cita.");
       }
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "No fue posible guardar el estudio y la clínica."
+        err instanceof Error ? err.message : "No fue posible actualizar los datos de la cita."
       );
     } finally {
       setActionLoading(false);
     }
   };
 
-  // Paso 2 -> Paso 3 (guarda perfil completo + cotización + asigna a Call Center)
-  const handleStep2Submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!token || !isProfileValid || !selectedStudy || !selectedClinic) return;
-
+  // Guardar borrador de cita en pausa (PAUSADO_PENDIENTE) sin modificar la cuenta del paciente
+  const handleSaveDraftForLater = async (currentStepToKeep: WizardStep) => {
+    if (!token || !selectedCase) return;
     setActionLoading(true);
     setError(null);
     setNotice(null);
 
-    const phone = normalizedPhoneForSubmit(telefono);
-    const stateObj = MEXICAN_STATES.find((st) => st.code === estadoNacimientoCode);
-
     try {
-      if (!forThirdParty) {
-        await api.registerWebPatient({
-          nombres: nombres.trim(),
-          apellido_paterno: apellidoPaterno.trim(),
-          apellido_materno: apellidoMaterno.trim() || undefined,
-          fecha_nacimiento: fechaNacimiento,
-          genero,
-          estado_nacimiento: stateObj?.name || estadoNacimientoCode,
-          pais,
-          curp: curp.trim().toUpperCase(),
-          telefono: phone,
-          ...(caseWebSessionId ? { webSessionId: caseWebSessionId } : {}),
-        });
-      }
-
-      const quoteRes = await api.quoteWebStudy({
-        caseId: selectedCase?.id,
-        expectedVersion: selectedCase?.version,
-        ...(caseWebSessionId ? { webSessionId: caseWebSessionId } : {}),
-        telefono: phone,
-        curp: forThirdParty ? selectedCase?.patient.curp || undefined : curp.trim().toUpperCase(),
-        nombres: forThirdParty ? selectedCase?.patient.firstName || undefined : nombres.trim(),
-        apellido_paterno: forThirdParty
-          ? selectedCase?.patient.paternalLastName || undefined
-          : apellidoPaterno.trim(),
-        studyCode: selectedStudy.code,
-        clinicId: selectedClinic.id,
-        preferredSlot: { date: preferredDate, time: preferredTime },
-        ...(forThirdParty
-          ? {
-              forThirdParty: true,
-              relationship,
-              thirdPartyConsent: true,
-              beneficiary: {
-                nombres: nombres.trim(),
-                apellido_paterno: apellidoPaterno.trim(),
-                apellido_materno: apellidoMaterno.trim() || undefined,
-                fecha_nacimiento: fechaNacimiento,
-                genero,
-                estado_nacimiento: stateObj?.name || estadoNacimientoCode,
-                pais,
-                curp: curp.trim().toUpperCase(),
-              },
-            }
-          : {}),
-      });
-
-      const assigned = await api.assignCallCenterCase(
-        token,
-        quoteRes.case.id,
-        quoteRes.case.version
-      );
-
-      saveBookingDraft({
-        caseId: assigned.case.id,
-        webSessionId: caseWebSessionId || quoteRes.webSessionId,
-        step: 3,
-        selectedStudyCode: selectedStudy.code,
-        selectedClinicId: selectedClinic.id,
+      const res = await api.updateCallCenterCase(token, selectedCase.id, {
+        expectedVersion: selectedCase.version,
+        ...(selectedStudyCode ? { studyCode: selectedStudyCode } : {}),
+        ...(selectedClinicId ? { clinicId: selectedClinicId } : {}),
         preferredDate,
         preferredTime,
-        forThirdParty,
-        relationship,
-        thirdPartyConsent,
-        nombres,
-        apellidoPaterno,
-        apellidoMaterno,
-        fechaNacimiento,
-        genero,
-        estadoNacimientoCode,
-        pais,
-        curp,
-        telefono: phone,
         paymentMethod,
-        advisorNotes,
-        updatedAt: new Date().toISOString(),
-        updatedByChannel: "CALL_CENTER",
+        advisorNotes: advisorNotes.trim() || undefined,
+        action: "pause",
       });
 
-      setCreatingNewBooking(false);
-      setSelectedCaseId(assigned.case.id);
-      hydratedCaseKeyRef.current = `${assigned.case.id}:${assigned.case.version}`;
-      await fetchCatalogAndQueue();
-      setStep(3);
-      setNotice("Pre-registro guardado y sincronizado en todos los canales.");
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "No fue posible guardar el pre-registro del paciente."
-      );
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  // Guardar borrador en Paso 2 o Paso 3 (PAUSADO_PENDIENTE) para retomar en otro canal
-  const handleSaveDraftForLater = async (currentStepToKeep: WizardStep) => {
-    if (!selectedCase) return;
-    setActionLoading(true);
-    setError(null);
-    setNotice(null);
-
-    try {
-      if (currentStepToKeep === 2 && !forThirdParty) {
-        const phoneDigits = telefono.replace(/\D/g, "");
-        const validPhone = phoneDigits.length >= 10 ? normalizedPhoneForSubmit(telefono) : undefined;
-        const validCurp = curp.trim().length === 18 ? curp.trim().toUpperCase() : undefined;
-        const stateObj = MEXICAN_STATES.find((st) => st.code === estadoNacimientoCode);
-        if (nombres.trim() || apellidoPaterno.trim() || validPhone || validCurp) {
-          await api.registerWebPatient({
-            ...(nombres.trim() ? { nombres: nombres.trim() } : {}),
-            ...(apellidoPaterno.trim() ? { apellido_paterno: apellidoPaterno.trim() } : {}),
-            ...(apellidoMaterno.trim() ? { apellido_materno: apellidoMaterno.trim() } : {}),
-            ...(fechaNacimiento.length === 10 ? { fecha_nacimiento: fechaNacimiento } : {}),
-            ...(genero ? { genero } : {}),
-            ...(stateObj ? { estado_nacimiento: stateObj.name } : {}),
-            pais,
-            ...(validCurp ? { curp: validCurp } : {}),
-            ...(validPhone ? { telefono: validPhone } : {}),
-            ...(caseWebSessionId ? { webSessionId: caseWebSessionId } : {}),
-          });
-        }
-      }
-
-      const paused = await api.abandonWebCase({
-        caseId: selectedCase.id,
-        expectedVersion: selectedCase.version,
-        reason: `ADVISOR_SAVED_DRAFT_STEP_${currentStepToKeep}`,
-      });
       saveBookingDraft({
-        caseId: paused.case.id,
+        caseId: res.case.id,
         webSessionId: caseWebSessionId,
         step: currentStepToKeep,
         selectedStudyCode,
         selectedClinicId,
         preferredDate,
         preferredTime,
-        forThirdParty,
-        relationship,
-        thirdPartyConsent,
-        nombres,
-        apellidoPaterno,
-        apellidoMaterno,
-        fechaNacimiento,
-        genero,
-        estadoNacimientoCode,
-        pais,
-        curp,
-        telefono,
         paymentMethod,
         advisorNotes,
         updatedAt: new Date().toISOString(),
         updatedByChannel: "CALL_CENTER",
       });
-      hydratedCaseKeyRef.current = `${paused.case.id}:${paused.case.version}`;
+      hydratedCaseKeyRef.current = null;
       await fetchCatalogAndQueue();
       setNotice(
-        "Borrador guardado. El paciente podrá retomar exactamente en este paso desde Sitio Web o WhatsApp."
+        "Cita guardada en pausa. El paciente podrá retomar exactamente en este paso desde Sitio Web o WhatsApp."
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "No fue posible guardar el borrador.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Editar una cita ya confirmada (solo datos de cita: estudio, clínica, fecha, hora, pago)
+  const handleSaveConfirmedEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !selectedCase || !selectedStudyCode || !selectedClinicId) return;
+    setActionLoading(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await api.updateCallCenterCase(token, selectedCase.id, {
+        expectedVersion: selectedCase.version,
+        studyCode: selectedStudyCode,
+        clinicId: selectedClinicId,
+        preferredDate,
+        preferredTime,
+        paymentMethod,
+        advisorNotes: advisorNotes.trim() || undefined,
+        action: "save",
+      });
+      setEditingConfirmed(false);
+      hydratedCaseKeyRef.current = null;
+      await fetchCatalogAndQueue();
+      setNotice("Cita confirmada actualizada y sincronizada en todos los canales.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudieron guardar los cambios en la cita.");
     } finally {
       setActionLoading(false);
     }
@@ -795,6 +626,7 @@ export const CallCenterPage: React.FC = () => {
         expectedVersion: selectedCase.version,
         ...(preferredDate ? { preferredDate } : {}),
         ...(preferredTime ? { preferredTime } : {}),
+        paymentMethod,
         advisorNotes: notesWithPayment,
       });
 
@@ -916,7 +748,6 @@ export const CallCenterPage: React.FC = () => {
           token={token}
           selectedCase={selectedCase}
           onSelectCaseById={(caseId) => {
-            setCreatingNewBooking(false);
             hydratedCaseKeyRef.current = null;
             setSelectedCaseId(caseId);
           }}
@@ -931,24 +762,15 @@ export const CallCenterPage: React.FC = () => {
           <aside className="lg:col-span-4 space-y-5">
             <div className="pb-3 border-b border-[#E4E7EB] flex items-center justify-between gap-2">
               <h2 className="text-base font-bold text-[#1F2933]">
-                Cola de casos ({filteredCases.length})
+                Cola de citas ({filteredCases.length})
               </h2>
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={fetchCatalogAndQueue}
-                  className="text-xs font-semibold text-[#52606D] hover:text-[#1F2933]"
-                >
-                  {loading ? "..." : "Actualizar"}
-                </button>
-                <button
-                  type="button"
-                  onClick={startNewPhoneBooking}
-                  className="px-2.5 py-1 border border-[#00875A] text-xs font-semibold text-[#00875A] hover:bg-[#00875A] hover:text-[#FFFFFF] transition-colors"
-                >
-                  + Nueva cita
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={fetchCatalogAndQueue}
+                className="text-xs font-semibold text-[#52606D] hover:text-[#1F2933]"
+              >
+                {loading ? "..." : "Actualizar"}
+              </button>
             </div>
 
             {/* Filtros por usuario y estado */}
@@ -1039,7 +861,7 @@ export const CallCenterPage: React.FC = () => {
             ) : (
               <ul className="divide-y divide-[#E4E7EB] border-b border-[#E4E7EB] max-h-[680px] overflow-y-auto">
                 {filteredCases.map((c) => {
-                  const active = !creatingNewBooking && c.id === selectedCaseId;
+                  const active = c.id === selectedCaseId;
                   const fullName = getPatientDisplayName(c);
                   const stMeta = STATE_META[c.currentState];
                   return (
@@ -1047,7 +869,6 @@ export const CallCenterPage: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => {
-                          setCreatingNewBooking(false);
                           hydratedCaseKeyRef.current = null;
                           setSelectedCaseId(c.id);
                         }}
@@ -1083,50 +904,37 @@ export const CallCenterPage: React.FC = () => {
             )}
           </aside>
 
-          {/* ==================== COLUMNA DERECHA: FLUJO COMPLETO DE 3 PASOS ==================== */}
+          {/* ==================== COLUMNA DERECHA: GESTIÓN DE CITA (SOLO CITAS) ==================== */}
           <section className="lg:col-span-8 lg:border-l lg:border-[#E4E7EB] lg:pl-10 space-y-8">
-            {!selectedCase && !creatingNewBooking ? (
+            {!selectedCase ? (
               <div className="py-12 space-y-4">
                 <h2 className="text-xl font-bold text-[#1F2933]">
-                  Selecciona un usuario de la cola o inicia una cita telefónica
+                  Selecciona una cita de la cola para gestionarla
                 </h2>
                 <p className="text-sm text-[#52606D] max-w-lg">
-                  Puedes retomar exactamente el paso donde se quedó un paciente en sitio web o
-                  WhatsApp, o capturar una cita nueva desde el Paso 01.
+                  Desde Call Center puedes consultar y modificar estudio, clínica, horario, forma de
+                  pago y confirmación de citas existentes en tiempo real. La modificación de cuentas
+                  de usuario está reservada al paciente o al Administrador.
                 </p>
-                <button
-                  type="button"
-                  onClick={startNewPhoneBooking}
-                  className="h-11 px-6 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] text-sm font-semibold transition-colors"
-                >
-                  Iniciar nueva cita telefónica
-                </button>
               </div>
             ) : (
               <>
-                {/* Cabecera del expediente o nueva llamada */}
+                {/* Cabecera del expediente */}
                 <header className="space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
-                        {creatingNewBooking
-                          ? "Nueva cita telefónica · Call Center"
-                          : `Screen-Pop omnicanal · Último canal: ${
-                              CHANNEL_META[selectedCase!.currentChannel].label
-                            }`}
+                        Screen-Pop omnicanal · Último canal:{" "}
+                        {CHANNEL_META[selectedCase.currentChannel].label}
                       </p>
                       <h2 className="text-2xl font-bold text-[#1F2933] mt-1">
-                        {creatingNewBooking
-                          ? "Agendar cita por llamada"
-                          : getPatientDisplayName(selectedCase!)}
+                        {getPatientDisplayName(selectedCase)}
                       </h2>
-                      {selectedCase && (
-                        <p className="text-xs font-mono text-[#52606D] mt-1">
-                          {selectedCase.patient.phone ? `Tel: ${selectedCase.patient.phone} · ` : ""}
-                          {selectedCase.patient.curp ? `CURP: ${selectedCase.patient.curp} · ` : ""}
-                          v{selectedCase.version}
-                        </p>
-                      )}
+                      <p className="text-xs font-mono text-[#52606D] mt-1">
+                        {selectedCase.patient.phone ? `Tel: ${selectedCase.patient.phone} · ` : ""}
+                        {selectedCase.patient.curp ? `CURP: ${selectedCase.patient.curp} · ` : ""}
+                        v{selectedCase.version}
+                      </p>
                     </div>
 
                     {selectedCase && (
@@ -1409,388 +1217,291 @@ export const CallCenterPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* ==================== PASO 2: PRE-REGISTRO ==================== */}
+                {/* ==================== PASO 2: DATOS DEL PACIENTE (SOLO LECTURA) ==================== */}
                 {step === 2 && !isConfirmed && (
-                  <form onSubmit={handleStep2Submit} className="space-y-6">
+                  <div className="space-y-6">
                     <div className="flex items-center justify-between gap-4">
                       <button
                         type="button"
                         onClick={() => setStep(1)}
                         className="text-xs font-semibold text-[#00875A] hover:underline"
                       >
-                        ← Cambiar estudio o clínica ({selectedStudy?.name})
+                        ← Modificar estudio, clínica o horario ({selectedStudy?.name})
                       </button>
                     </div>
 
-                    <section className="space-y-3 pb-5 border-b border-[#E4E7EB]">
-                      <h3 className="text-base font-bold text-[#1F2933]">
-                        ¿Para quién es este estudio?
+                    <section className="border-l-2 border-[#00875A] pl-4 space-y-1">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-[#00875A]">
+                        Política de permisos · Call Center
                       </h3>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 border border-[#E4E7EB]">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setForThirdParty(false);
-                            setThirdPartyConsent(false);
-                          }}
-                          className={`p-3.5 text-left border-b sm:border-b-0 sm:border-r border-[#E4E7EB] transition-colors ${
-                            !forThirdParty
-                              ? "bg-[#00875A] text-[#FFFFFF]"
-                              : "bg-[#FFFFFF] text-[#1F2933] hover:bg-[#F7F8F9]"
-                          }`}
-                        >
-                          <strong className="block text-sm font-semibold">
-                            Para el titular
-                          </strong>
-                          <small
-                            className={`block text-xs mt-0.5 ${
-                              !forThirdParty ? "text-[#FFFFFF]" : "text-[#52606D]"
-                            }`}
-                          >
-                            Paciente principal de la llamada
-                          </small>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setForThirdParty(true);
-                            setThirdPartyConsent(false);
-                          }}
-                          className={`p-3.5 text-left transition-colors ${
-                            forThirdParty
-                              ? "bg-[#00875A] text-[#FFFFFF]"
-                              : "bg-[#FFFFFF] text-[#1F2933] hover:bg-[#F7F8F9]"
-                          }`}
-                        >
-                          <strong className="block text-sm font-semibold">
-                            Para un familiar o conocido
-                          </strong>
-                          <small
-                            className={`block text-xs mt-0.5 ${
-                              forThirdParty ? "text-[#FFFFFF]" : "text-[#52606D]"
-                            }`}
-                          >
-                            Expediente clínico independiente
-                          </small>
-                        </button>
-                      </div>
-
-                      {forThirdParty && (
-                        <div className="pt-2">
-                          <label
-                            htmlFor="cc-relationship"
-                            className="block text-xs font-semibold text-[#1F2933] mb-1.5"
-                          >
-                            Parentesco / Relación con el titular *
-                          </label>
-                          <select
-                            id="cc-relationship"
-                            value={relationship}
-                            onChange={(e) => setRelationship(e.target.value as RelationshipType)}
-                            className="w-full h-11 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-sm text-[#1F2933] focus:border-[#00875A]"
-                          >
-                            {RELATIONSHIP_OPTIONS.map((opt) => (
-                              <option key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
+                      <p className="text-xs text-[#52606D] leading-relaxed">
+                        Call Center únicamente puede modificar citas (estudio, clínica, fecha,
+                        horario y forma de pago). Los datos de la cuenta del paciente son de solo
+                        lectura y únicamente pueden ser modificados por el propio usuario o por un
+                        Administrador.
+                      </p>
                     </section>
 
-                    <div className="space-y-4">
-                      <h3 className="text-sm font-bold uppercase tracking-wider text-[#00875A]">
-                        Perfil del paciente (9 campos oficiales)
+                    <section className="space-y-3">
+                      <h3 className="text-base font-bold text-[#1F2933]">
+                        Perfil del paciente (solo lectura)
                       </h3>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                          <label
-                            htmlFor="cc-nombres"
-                            className="block text-xs font-semibold text-[#1F2933] mb-1.5"
-                          >
-                            Nombre(s) *
-                          </label>
-                          <input
-                            id="cc-nombres"
-                            type="text"
-                            required
-                            value={nombres}
-                            onChange={(e) => {
-                              setCurpManuallyEdited(false);
-                              setNombres(e.target.value);
-                            }}
-                            placeholder="Nombre(s)"
-                            className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm text-[#1F2933] focus:border-[#00875A]"
-                          />
+                      <dl className="divide-y divide-[#E4E7EB] border-t border-b border-[#E4E7EB] text-sm">
+                        <div className="py-2.5 flex justify-between gap-4">
+                          <dt className="text-[#52606D]">Nombre completo</dt>
+                          <dd className="font-semibold text-[#1F2933] text-right">
+                            {[nombres, apellidoPaterno, apellidoMaterno].filter(Boolean).join(" ") ||
+                              "Pendiente de captura por el paciente"}
+                          </dd>
                         </div>
-                        <div>
-                          <label
-                            htmlFor="cc-paterno"
-                            className="block text-xs font-semibold text-[#1F2933] mb-1.5"
-                          >
-                            Apellido paterno *
-                          </label>
-                          <input
-                            id="cc-paterno"
-                            type="text"
-                            required
-                            value={apellidoPaterno}
-                            onChange={(e) => {
-                              setCurpManuallyEdited(false);
-                              setApellidoPaterno(e.target.value);
-                            }}
-                            placeholder="Apellido paterno"
-                            className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm text-[#1F2933] focus:border-[#00875A]"
-                          />
+                        <div className="py-2.5 flex justify-between gap-4">
+                          <dt className="text-[#52606D]">Teléfono</dt>
+                          <dd className="font-mono text-xs text-[#1F2933]">
+                            {telefono || "Sin registrar"}
+                          </dd>
                         </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                          <label
-                            htmlFor="cc-materno"
-                            className="block text-xs font-semibold text-[#1F2933] mb-1.5"
-                          >
-                            Apellido materno
-                          </label>
-                          <input
-                            id="cc-materno"
-                            type="text"
-                            value={apellidoMaterno}
-                            onChange={(e) => {
-                              setCurpManuallyEdited(false);
-                              setApellidoMaterno(e.target.value);
-                            }}
-                            placeholder="Apellido materno"
-                            className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm text-[#1F2933] focus:border-[#00875A]"
-                          />
+                        <div className="py-2.5 flex justify-between gap-4">
+                          <dt className="text-[#52606D]">Correo electrónico</dt>
+                          <dd className="text-xs text-[#1F2933]">
+                            {selectedCase.patient.email || "Sin registrar"}
+                          </dd>
                         </div>
-
-                        <div>
-                          <label
-                            htmlFor="cc-fecha-nac"
-                            className="block text-xs font-semibold text-[#1F2933] mb-1.5"
-                          >
-                            Fecha de nacimiento *
-                          </label>
-                          <div
-                            onClick={() => dateInputRef.current?.showPicker?.()}
-                            className="relative w-full h-11 border border-[#E4E7EB] px-3.5 flex items-center justify-between bg-[#FFFFFF] cursor-pointer"
-                          >
-                            <p className="text-sm text-[#1F2933]">
-                              {formatDateDisplay(fechaNacimiento)}
-                            </p>
-                            <small className="text-xs font-semibold text-[#00875A]">
-                              Calendario
-                            </small>
-                            <input
-                              ref={dateInputRef}
-                              id="cc-fecha-nac"
-                              type="date"
-                              required
-                              value={fechaNacimiento}
-                              onChange={(e) => {
-                                setCurpManuallyEdited(false);
-                                setFechaNacimiento(e.target.value);
-                              }}
-                              className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                            />
-                          </div>
+                        <div className="py-2.5 flex justify-between gap-4">
+                          <dt className="text-[#52606D]">CURP</dt>
+                          <dd className="font-mono text-xs text-[#1F2933]">
+                            {curp || "Pendiente"}
+                          </dd>
                         </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-end">
-                        <div className="sm:col-span-6">
-                          <p className="text-xs font-semibold text-[#1F2933] mb-1.5">Género *</p>
-                          <div className="grid grid-cols-2 border border-[#E4E7EB]">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setCurpManuallyEdited(false);
-                                setGenero("FEMENINO");
-                              }}
-                              className={`h-11 text-sm font-semibold border-r border-[#E4E7EB] transition-colors ${
-                                genero === "FEMENINO"
-                                  ? "bg-[#00875A] text-[#FFFFFF]"
-                                  : "bg-[#FFFFFF] text-[#1F2933] hover:bg-[#F7F8F9]"
-                              }`}
-                            >
-                              Mujer
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setCurpManuallyEdited(false);
-                                setGenero("MASCULINO");
-                              }}
-                              className={`h-11 text-sm font-semibold transition-colors ${
-                                genero === "MASCULINO"
-                                  ? "bg-[#00875A] text-[#FFFFFF]"
-                                  : "bg-[#FFFFFF] text-[#1F2933] hover:bg-[#F7F8F9]"
-                              }`}
-                            >
-                              Hombre
-                            </button>
-                          </div>
+                        <div className="py-2.5 flex justify-between gap-4">
+                          <dt className="text-[#52606D]">Fecha de nacimiento</dt>
+                          <dd className="text-xs text-[#1F2933]">
+                            {fechaNacimiento ? formatDateDisplay(fechaNacimiento) : "Sin registrar"}
+                          </dd>
                         </div>
-
-                        <div className="sm:col-span-6">
-                          <label
-                            htmlFor="cc-estado"
-                            className="block text-xs font-semibold text-[#1F2933] mb-1.5"
-                          >
-                            Estado de nacimiento *
-                          </label>
-                          <select
-                            id="cc-estado"
-                            required
-                            value={estadoNacimientoCode}
-                            onChange={(e) => {
-                              setCurpManuallyEdited(false);
-                              setEstadoNacimientoCode(e.target.value);
-                            }}
-                            className="w-full h-11 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-sm text-[#1F2933] focus:border-[#00875A]"
-                          >
-                            <option value="">Seleccione estado</option>
-                            {MEXICAN_STATES.map((st) => (
-                              <option key={st.code} value={st.code}>
-                                {st.name}
-                              </option>
-                            ))}
-                          </select>
+                        <div className="py-2.5 flex justify-between gap-4">
+                          <dt className="text-[#52606D]">Género</dt>
+                          <dd className="text-xs text-[#1F2933]">
+                            {genero === "FEMENINO"
+                              ? "Mujer"
+                              : genero === "MASCULINO"
+                              ? "Hombre"
+                              : "Sin registrar"}
+                          </dd>
                         </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                          <label
-                            htmlFor="cc-pais"
-                            className="block text-xs font-semibold text-[#1F2933] mb-1.5"
-                          >
-                            País *
-                          </label>
-                          <select
-                            id="cc-pais"
-                            required
-                            value={pais}
-                            onChange={(e) => setPais(e.target.value)}
-                            className="w-full h-11 border border-[#E4E7EB] bg-[#FFFFFF] px-3.5 text-sm text-[#1F2933] focus:border-[#00875A]"
-                          >
-                            <option value="MÉXICO">MÉXICO</option>
-                            <option value="ESTADOS UNIDOS">ESTADOS UNIDOS</option>
-                            <option value="OTRO">OTRO</option>
-                          </select>
+                        <div className="py-2.5 flex justify-between gap-4">
+                          <dt className="text-[#52606D]">Estado / País</dt>
+                          <dd className="text-xs text-[#1F2933]">
+                            {(MEXICAN_STATES.find((st) => st.code === estadoNacimientoCode)?.name ||
+                              selectedCase.patient.birthState ||
+                              "Sin registrar") +
+                              " · " +
+                              pais}
+                          </dd>
                         </div>
-
-                        <div>
-                          <label
-                            htmlFor="cc-curp"
-                            className="block text-xs font-semibold text-[#1F2933] mb-1.5"
-                          >
-                            CURP *
-                          </label>
-                          <input
-                            id="cc-curp"
-                            type="text"
-                            required
-                            maxLength={18}
-                            value={curp}
-                            onChange={(e) => {
-                              setCurpManuallyEdited(true);
-                              setCurp(e.target.value.toUpperCase());
-                            }}
-                            placeholder="Se generará automáticamente"
-                            className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm font-mono text-[#1F2933] focus:border-[#00875A]"
-                          />
-                        </div>
-                      </div>
-
-                      <div>
-                        <label
-                          htmlFor="cc-tel"
-                          className="block text-xs font-semibold text-[#1F2933] mb-1.5"
-                        >
-                          {forThirdParty ? "Teléfono de contacto del titular *" : "Teléfono *"}
-                        </label>
-                        <input
-                          id="cc-tel"
-                          type="tel"
-                          required
-                          value={telefono}
-                          onChange={(e) => setTelefono(e.target.value)}
-                          placeholder="10 dígitos o +52..."
-                          className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm text-[#1F2933] focus:border-[#00875A]"
-                        />
-                      </div>
-
-                      {forThirdParty && (
-                        <label className="block border-t border-b border-[#E4E7EB] py-3.5 cursor-pointer">
-                          <div className="flex items-start gap-3">
-                            <input
-                              type="checkbox"
-                              checked={thirdPartyConsent}
-                              onChange={(e) => setThirdPartyConsent(e.target.checked)}
-                              className="mt-1 w-4 h-4 accent-[#00875A]"
-                            />
-                            <p className="text-xs text-[#52606D] leading-relaxed">
-                              <strong className="text-[#1F2933]">
-                                Consentimiento verbal confirmado en llamada:
-                              </strong>{" "}
-                              El titular confirma contar con autorización del beneficiario para
-                              agendar esta cita con expediente clínico separado. *
-                            </p>
-                          </div>
-                        </label>
-                      )}
-                    </div>
+                      </dl>
+                    </section>
 
                     <div className="pt-4 border-t border-[#E4E7EB] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      {selectedCase ? (
-                        <button
-                          type="button"
-                          disabled={actionLoading}
-                          onClick={() => handleSaveDraftForLater(2)}
-                          className="h-11 px-5 border border-[#E4E7EB] bg-[#FFFFFF] hover:border-[#1F2933] text-xs font-semibold text-[#1F2933] transition-colors disabled:opacity-50"
-                        >
-                          Guardar y continuar después
-                        </button>
-                      ) : (
-                        <p className="text-xs text-[#52606D]">* Campos obligatorios</p>
-                      )}
+                      <button
+                        type="button"
+                        disabled={actionLoading}
+                        onClick={() => handleSaveDraftForLater(2)}
+                        className="h-11 px-5 border border-[#E4E7EB] bg-[#FFFFFF] hover:border-[#1F2933] text-xs font-semibold text-[#1F2933] transition-colors disabled:opacity-50"
+                      >
+                        Pausar cita para después
+                      </button>
 
                       <button
-                        type="submit"
-                        disabled={!isProfileValid || actionLoading}
-                        className="h-12 px-7 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        type="button"
+                        onClick={() => setStep(3)}
+                        className="h-12 px-7 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] text-sm font-semibold transition-colors"
                       >
-                        {actionLoading ? "Guardando..." : "Continuar a resumen y pago"}
+                        Continuar a resumen y pago
                       </button>
                     </div>
-                  </form>
+                  </div>
                 )}
 
                 {/* ==================== PASO 3: RESUMEN Y PAGO ==================== */}
                 {step === 3 && selectedCase && (
                   <div className="space-y-8">
                     {isConfirmed ? (
-                      <section className="border-l-2 border-[#00875A] pl-5 py-1 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div className="space-y-1">
-                          <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
-                            Cita confirmada con éxito
-                          </p>
-                          <strong className="block text-2xl font-bold font-mono text-[#1F2933]">
-                            {selectedCase.contextJson.appointment_folio}
-                          </strong>
-                          <code className="block text-xs font-mono text-[#52606D] break-all">
-                            QR: {selectedCase.contextJson.qr_payload}
-                          </code>
+                      <section className="space-y-6">
+                        <div className="border-l-2 border-[#00875A] pl-5 py-1 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                          <div className="space-y-1">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
+                              Cita confirmada con éxito
+                            </p>
+                            <strong className="block text-2xl font-bold font-mono text-[#1F2933]">
+                              {selectedCase.contextJson.appointment_folio}
+                            </strong>
+                            <code className="block text-xs font-mono text-[#52606D] break-all">
+                              QR: {selectedCase.contextJson.qr_payload}
+                            </code>
+                          </div>
+                          <div className="flex items-center gap-4 shrink-0 self-start">
+                            <button
+                              type="button"
+                              onClick={() => setEditingConfirmed((v) => !v)}
+                              className="h-10 px-4 border border-[#00875A] text-xs font-semibold text-[#00875A] hover:bg-[#00875A] hover:text-[#FFFFFF] transition-colors"
+                            >
+                              {editingConfirmed ? "Cancelar edición" : "Editar cita confirmada"}
+                            </button>
+                            <div className="p-2 border border-[#E4E7EB]">
+                              <QrCode className="w-16 h-16 text-[#1F2933]" />
+                            </div>
+                          </div>
                         </div>
-                        <div className="p-2 border border-[#E4E7EB] shrink-0 self-start">
-                          <QrCode className="w-16 h-16 text-[#1F2933]" />
-                        </div>
+
+                        {editingConfirmed && (
+                          <form
+                            onSubmit={handleSaveConfirmedEdit}
+                            className="bg-[#F7F8F9] border border-[#E4E7EB] p-5 space-y-4"
+                          >
+                            <div>
+                              <h4 className="text-sm font-bold text-[#1F2933]">
+                                Modificar cita confirmada (se conserva el folio)
+                              </h4>
+                              <p className="text-xs text-[#52606D] mt-0.5">
+                                Solo se editan los datos de la cita; el paciente y Administrador
+                                recibirán la actualización al instante.
+                              </p>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              <div>
+                                <label
+                                  htmlFor="cc-edit-study"
+                                  className="block text-xs font-semibold text-[#1F2933] mb-1"
+                                >
+                                  Estudio
+                                </label>
+                                <select
+                                  id="cc-edit-study"
+                                  value={selectedStudyCode}
+                                  onChange={(e) => setSelectedStudyCode(e.target.value)}
+                                  className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                                >
+                                  {studies.map((st) => (
+                                    <option key={st.code} value={st.code}>
+                                      {st.name} ({formatMoney(st.price)})
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label
+                                  htmlFor="cc-edit-clinic"
+                                  className="block text-xs font-semibold text-[#1F2933] mb-1"
+                                >
+                                  Clínica
+                                </label>
+                                <select
+                                  id="cc-edit-clinic"
+                                  value={selectedClinicId}
+                                  onChange={(e) => setSelectedClinicId(e.target.value)}
+                                  className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                                >
+                                  {clinics.map((cl) => (
+                                    <option key={cl.id} value={cl.id}>
+                                      {cl.name} · {cl.city}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                              <div>
+                                <label
+                                  htmlFor="cc-edit-date"
+                                  className="block text-xs font-semibold text-[#1F2933] mb-1"
+                                >
+                                  Fecha
+                                </label>
+                                <input
+                                  id="cc-edit-date"
+                                  type="date"
+                                  value={preferredDate}
+                                  onChange={(e) => setPreferredDate(e.target.value)}
+                                  className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                                />
+                              </div>
+                              <div>
+                                <label
+                                  htmlFor="cc-edit-time"
+                                  className="block text-xs font-semibold text-[#1F2933] mb-1"
+                                >
+                                  Horario
+                                </label>
+                                <select
+                                  id="cc-edit-time"
+                                  value={preferredTime}
+                                  onChange={(e) => setPreferredTime(e.target.value)}
+                                  className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                                >
+                                  {TIME_SLOTS.map((slot) => (
+                                    <option key={slot} value={slot}>
+                                      {slot} hrs
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label
+                                  htmlFor="cc-edit-payment"
+                                  className="block text-xs font-semibold text-[#1F2933] mb-1"
+                                >
+                                  Forma de pago
+                                </label>
+                                <select
+                                  id="cc-edit-payment"
+                                  value={paymentMethod}
+                                  onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                                  className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                                >
+                                  <option value="online">Pago en línea (-10%)</option>
+                                  <option value="oxxo">OXXO Pay</option>
+                                  <option value="clinic">En clínica</option>
+                                </select>
+                              </div>
+                            </div>
+
+                            <div>
+                              <label
+                                htmlFor="cc-edit-notes"
+                                className="block text-xs font-semibold text-[#1F2933] mb-1"
+                              >
+                                Motivo del cambio / Notas del asesor
+                              </label>
+                              <input
+                                id="cc-edit-notes"
+                                type="text"
+                                value={advisorNotes}
+                                onChange={(e) => setAdvisorNotes(e.target.value)}
+                                placeholder="Ej. Reagendada a solicitud del paciente..."
+                                className="w-full h-10 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                              />
+                            </div>
+
+                            <div className="flex justify-end gap-3 pt-2">
+                              <button
+                                type="button"
+                                onClick={() => setEditingConfirmed(false)}
+                                className="h-10 px-4 border border-[#E4E7EB] bg-[#FFFFFF] text-xs font-semibold text-[#1F2933]"
+                              >
+                                Cancelar
+                              </button>
+                              <button
+                                type="submit"
+                                disabled={actionLoading}
+                                className="h-10 px-5 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] text-xs font-semibold transition-colors disabled:opacity-50"
+                              >
+                                {actionLoading ? "Guardando..." : "Guardar cambios en la cita"}
+                              </button>
+                            </div>
+                          </form>
+                        )}
                       </section>
                     ) : (
                       <>

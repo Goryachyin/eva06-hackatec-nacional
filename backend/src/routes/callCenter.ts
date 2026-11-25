@@ -17,7 +17,19 @@ const confirmSchema = z.object({
   expectedVersion: z.number().int().positive(),
   preferredDate: z.string().optional(),
   preferredTime: z.string().optional(),
+  paymentMethod: z.enum(["online", "oxxo", "clinic"]).optional(),
   advisorNotes: z.string().optional(),
+});
+
+const updateCallCenterCaseSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  studyCode: z.string().min(2).optional(),
+  clinicId: z.string().min(2).optional(),
+  preferredDate: z.string().optional(),
+  preferredTime: z.string().optional(),
+  paymentMethod: z.enum(["online", "oxxo", "clinic"]).optional(),
+  advisorNotes: z.string().optional(),
+  action: z.enum(["save", "pause", "reopen"]).default("save"),
 });
 
 const processCallSchema = z
@@ -62,7 +74,10 @@ export async function callCenterRoutes(app: FastifyInstance) {
               paternalLastName: true,
               maternalLastName: true,
               phone: true,
+              email: true,
               curp: true,
+              birthDate: true,
+              gender: true,
               birthState: true,
             },
           },
@@ -70,13 +85,18 @@ export async function callCenterRoutes(app: FastifyInstance) {
             select: { id: true, fullName: true, email: true },
           },
           journeyEvents: {
-            orderBy: { createdAt: "asc" },
-            take: 25,
+            orderBy: { createdAt: "desc" },
+            take: 50,
           },
         },
       });
 
-      return { count: cases.length, cases };
+      const normalizedCases = cases.map((c) => ({
+        ...c,
+        journeyEvents: [...c.journeyEvents].reverse(),
+      }));
+
+      return { count: normalizedCases.length, cases: normalizedCases };
     }
   );
 
@@ -157,6 +177,7 @@ export async function callCenterRoutes(app: FastifyInstance) {
         contextPatch: {
           appointment_folio: folio,
           qr_payload: qrPayload,
+          ...(body.paymentMethod ? { payment_method: body.paymentMethod } : {}),
           ...(body.preferredDate && body.preferredTime
             ? { preferred_slot: { date: body.preferredDate, time: body.preferredTime } }
             : {}),
@@ -184,6 +205,139 @@ export async function callCenterRoutes(app: FastifyInstance) {
       }
 
       return { case: updatedCase, folio, qrPayload, correlationId };
+    }
+  );
+
+  /**
+   * Modifica exclusivamente datos de la cita (estudio, clínica, fecha/hora, pago, pausa/reapertura).
+   * Call Center NO puede modificar datos de la cuenta ni identidad del paciente (reservado a Admin/Paciente).
+   */
+  app.patch(
+    "/api/call-center/cases/:caseId",
+    {
+      preHandler: advisorGuard,
+      schema: {
+        tags: ["Canal 3: Call Center (Rol Asesor)"],
+        summary: "Modifica únicamente los datos de una cita (abierta o confirmada) sin alterar la cuenta del paciente",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request, reply) => {
+      const { caseId } = request.params as { caseId: string };
+      const body = updateCallCenterCaseSchema.parse(request.body);
+      const advisor = request.staffUser!;
+
+      const existing = await prisma.serviceCase.findUnique({
+        where: { id: caseId },
+        include: {
+          patient: { select: { phone: true } },
+          requester: { select: { phone: true } },
+        },
+      });
+      if (!existing) {
+        return reply.status(404).send({ error: "CASE_NOT_FOUND", message: "Cita no encontrada." });
+      }
+
+      const prevCtx = (existing.contextJson ?? {}) as CaseContextJson;
+      const contextPatch: Partial<CaseContextJson> = {};
+      const changes: Record<string, unknown> = {};
+
+      if (body.studyCode) {
+        const st = findStudyByCode(body.studyCode);
+        if (!st) {
+          return reply.status(400).send({ error: "INVALID_STUDY", message: "Estudio no encontrado en catálogo." });
+        }
+        contextPatch.study = { code: st.code, name: st.name, price: st.price, prep: st.prep };
+        changes.studyCode = st.code;
+      }
+
+      if (body.clinicId) {
+        const cl = findClinicById(body.clinicId);
+        if (!cl) {
+          return reply.status(400).send({ error: "INVALID_CLINIC", message: "Clínica no encontrada en catálogo." });
+        }
+        contextPatch.clinic = { id: cl.id, name: cl.name, city: cl.city, address: cl.address };
+        changes.clinicId = cl.id;
+      }
+
+      if (body.preferredDate || body.preferredTime) {
+        const nextDate = body.preferredDate || prevCtx.preferred_slot?.date || new Date().toISOString().slice(0, 10);
+        const nextTime = body.preferredTime || prevCtx.preferred_slot?.time || "09:30";
+        contextPatch.preferred_slot = { date: nextDate, time: nextTime };
+        changes.preferredSlot = contextPatch.preferred_slot;
+      }
+
+      if (body.paymentMethod) {
+        contextPatch.payment_method = body.paymentMethod;
+        changes.paymentMethod = body.paymentMethod;
+      }
+
+      const isConfirmed = existing.currentState === CaseState.CITA_CONFIRMADA;
+      const effectiveStudy = contextPatch.study ?? prevCtx.study;
+      const effectiveClinic = contextPatch.clinic ?? prevCtx.clinic;
+
+      if (isConfirmed && prevCtx.appointment_folio) {
+        contextPatch.qr_payload = `SALUDDIGNA|${prevCtx.appointment_folio}|${effectiveStudy?.code ?? "EST"}|${effectiveClinic?.id ?? "CLN"}`;
+      }
+
+      let nextState: CaseState;
+      let eventType: EventType = EventType.CONTEXT_REHYDRATED;
+
+      if (isConfirmed) {
+        nextState = CaseState.CITA_CONFIRMADA;
+      } else if (body.action === "pause") {
+        nextState = CaseState.PAUSADO_PENDIENTE;
+        eventType = EventType.FLOW_INTERRUPTED;
+      } else if (body.action === "reopen") {
+        nextState = CaseState.EN_ATENCION_ASESOR;
+      } else {
+        nextState =
+          existing.currentState === CaseState.INICIADO
+            ? effectiveClinic
+              ? CaseState.CLINICA_ELEGIDA
+              : effectiveStudy
+              ? CaseState.COTIZANDO
+              : CaseState.EN_ATENCION_ASESOR
+            : CaseState.EN_ATENCION_ASESOR;
+      }
+
+      const { updatedCase, correlationId } = await transitionServiceCase({
+        caseId: existing.id,
+        expectedVersion: body.expectedVersion,
+        nextState,
+        channel: Channel.CALL_CENTER,
+        actorRole: ActorRole.ADVISOR,
+        eventType,
+        assignedAdvisorId: advisor.sub,
+        contextPatch,
+        eventPayload: {
+          via: "call_center_appointment_edit",
+          editedConfirmedAppointment: isConfirmed,
+          advisorName: advisor.fullName,
+          advisorNotes: body.advisorNotes?.trim() || null,
+          changes,
+        },
+      });
+
+      if (isConfirmed && Object.keys(changes).length > 0) {
+        const notifyPhone = existing.requester?.phone ?? existing.patient.phone;
+        const updatedCtx = (updatedCase.contextJson ?? {}) as CaseContextJson;
+        if (notifyPhone) {
+          await publishSignedGatewayOutbound({
+            toPhone: notifyPhone,
+            text:
+              `✏️ Tu cita confirmada (${updatedCtx.appointment_folio ?? "Folio activo"}) fue actualizada por Call Center (${advisor.fullName}):\n` +
+              `• Estudio: ${updatedCtx.study?.name ?? "Estudio"}\n` +
+              `• Clínica: ${updatedCtx.clinic?.name ?? "Clínica"}\n` +
+              (updatedCtx.preferred_slot
+                ? `• Horario: ${updatedCtx.preferred_slot.date} a las ${updatedCtx.preferred_slot.time}`
+                : ""),
+            correlationId,
+          }).catch(() => {});
+        }
+      }
+
+      return { case: updatedCase, correlationId };
     }
   );
 

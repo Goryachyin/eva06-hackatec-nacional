@@ -102,6 +102,8 @@ export interface CaseContextJson {
   qr_payload?: string | null;
   otp_verified_channels?: string[];
   handoff_summary?: string;
+  cancelled?: boolean;
+  cancelled_reason?: string;
 }
 
 export interface ServiceCase {
@@ -140,6 +142,7 @@ export interface IdentityLinkSummary {
 
 export interface AdminSanitizedCase {
   id: string;
+  patientId?: string;
   journeyId: string;
   patientMasked: string;
   requesterMasked?: string | null;
@@ -207,7 +210,10 @@ export interface CallCenterCaseItem extends ServiceCase {
     paternalLastName: string | null;
     maternalLastName: string | null;
     phone: string | null;
+    email?: string | null;
     curp: string | null;
+    birthDate?: string | null;
+    gender?: Gender | null;
     birthState: string | null;
   };
   assignedAdvisor: {
@@ -294,7 +300,16 @@ export interface AdminUserLookupItem {
   patientId: string;
   patientMasked: string;
   hasAccount: boolean;
+  firstName?: string | null;
+  paternalLastName?: string | null;
+  maternalLastName?: string | null;
+  birthDate?: string | null;
+  gender?: Gender | null;
   birthState: string | null;
+  country?: string | null;
+  curp?: string | null;
+  phone?: string | null;
+  email?: string | null;
   createdAt: string;
   identities: Array<IdentityLinkSummary & { verifiedAt?: string | null }>;
   cases: Array<{

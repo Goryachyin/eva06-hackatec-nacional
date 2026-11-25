@@ -70,6 +70,8 @@ export interface CaseContextJson {
   qr_payload?: string | null;
   otp_verified_channels?: string[];
   handoff_summary?: string;
+  cancelled?: boolean;
+  cancelled_reason?: string;
   beneficiary_summary?: {
     is_third_party: boolean;
     relationship: string;
@@ -181,6 +183,15 @@ export function buildDeterministicHandoffSummary(
   if (ctx.preferred_slot) {
     parts.push(`Horario preferido: ${ctx.preferred_slot.date} a las ${ctx.preferred_slot.time}.`);
   }
+  if (ctx.payment_method) {
+    const paymentLabel =
+      ctx.payment_method === "online"
+        ? "Pago en línea (-10%)"
+        : ctx.payment_method === "oxxo"
+        ? "OXXO Pay"
+        : "Pago en clínica";
+    parts.push(`Forma de pago: ${paymentLabel}.`);
+  }
   if (ctx.open_questions && ctx.open_questions.length > 0) {
     parts.push(`Duda pendiente: "${ctx.open_questions[ctx.open_questions.length - 1]}".`);
   }
@@ -190,7 +201,9 @@ export function buildDeterministicHandoffSummary(
   if (ctx.study?.prep) {
     parts.push(`Preparación: ${ctx.study.prep}`);
   }
-  if (ctx.appointment_folio) {
+  if (ctx.cancelled) {
+    parts.push(`Trámite anulado (${ctx.cancelled_reason || "solicitado por el paciente"}).`);
+  } else if (ctx.appointment_folio) {
     parts.push(`Cita confirmada con folio ${ctx.appointment_folio}.`);
   } else {
     parts.push(`Estado actual: ${currentState} (último canal: ${currentChannel}).`);

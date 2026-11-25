@@ -12,7 +12,15 @@ import {
 } from "@prisma/client";
 import { env } from "../config/env";
 import { prisma } from "../lib/prisma";
-import { maskIdentifier, maskPatientName, normalizePhone } from "../lib/crypto";
+import {
+  maskIdentifier,
+  maskPatientName,
+  normalizeCurp,
+  normalizeEmail,
+  normalizePersonName,
+  normalizePhone,
+  normalizePlaceName,
+} from "../lib/crypto";
 import {
   CLINICS_CATALOG,
   findClinicById,
@@ -136,6 +144,46 @@ function normalizeAsciiUpper(raw: string): string {
     .toUpperCase()
     .replace(/[^A-Z\s]/g, "")
     .trim();
+}
+
+function normalizeSearchText(raw: string): string {
+  return raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function splitFullNameIfNeeded(
+  nombresRaw?: string | null,
+  paternoRaw?: string | null,
+  maternoRaw?: string | null
+): { firstName?: string; paternalLastName?: string; maternalLastName?: string } {
+  const nom = nombresRaw?.trim() || "";
+  const pat = paternoRaw?.trim() || "";
+  const mat = maternoRaw?.trim() || "";
+  if (nom && !pat) {
+    const tokens = nom.split(/\s+/).filter(Boolean);
+    if (tokens.length === 2) {
+      return {
+        firstName: tokens[0],
+        paternalLastName: tokens[1],
+        ...(mat ? { maternalLastName: mat } : {}),
+      };
+    }
+    if (tokens.length >= 3) {
+      return {
+        firstName: tokens.slice(0, tokens.length - 2).join(" "),
+        paternalLastName: tokens[tokens.length - 2],
+        maternalLastName: mat || tokens[tokens.length - 1],
+      };
+    }
+  }
+  return {
+    ...(nom ? { firstName: nom } : {}),
+    ...(pat ? { paternalLastName: pat } : {}),
+    ...(mat ? { maternalLastName: mat } : {}),
+  };
 }
 
 function resolveMexicanState(input?: string | null): { code: string; name: string } | null {
@@ -326,7 +374,7 @@ const ORCHESTRATOR_TOOLS = [
     function: {
       name: "select_clinic_and_slot",
       description:
-        "Guarda la clínica oficial seleccionada y opcionalmente la fecha y hora preferida en el trámite activo (Paso 1: Clínica y horario).",
+        "Guarda la clínica oficial seleccionada y opcionalmente la fecha, hora preferida y el código de estudio (si aún no se había guardado) en el trámite activo (Paso 1: Estudio, clínica y horario).",
       parameters: {
         type: "object",
         properties: {
@@ -334,6 +382,11 @@ const ORCHESTRATOR_TOOLS = [
             type: "string",
             enum: CLINICS_CATALOG.map((c) => c.id),
             description: "ID exacto de la clínica oficial.",
+          },
+          studyCode: {
+            type: "string",
+            enum: STUDIES_CATALOG.map((s) => s.code),
+            description: "Código oficial del estudio si aún no estaba guardado en el trámite (opcional).",
           },
           preferredDate: {
             type: "string",
@@ -467,15 +520,15 @@ const ORCHESTRATOR_TOOLS = [
     function: {
       name: "switch_or_create_case",
       description:
-        "Permite cambiar a otro trámite existente del titular, iniciar una cita nueva para el titular, o crear una cita para un familiar/tercero con expediente clínico separado.",
+        "Permite cambiar a otro trámite existente del titular, iniciar una cita nueva para el titular, pausar la actual y abrir una nueva (pause_and_new), anular la actual incompleta y abrir una nueva (discard_and_new), o crear una cita para un familiar/tercero con expediente clínico separado.",
       parameters: {
         type: "object",
         properties: {
           action: {
             type: "string",
-            enum: ["switch", "new_self", "new_beneficiary"],
+            enum: ["switch", "new_self", "pause_and_new", "discard_and_new", "new_beneficiary"],
             description:
-              "switch (cambiar a un caseId existente), new_self (nuevo trámite para el titular), new_beneficiary (nuevo trámite para familiar/conocido).",
+              "switch (cambiar a un caseId existente), new_self (nuevo trámite para el titular), pause_and_new (guardar/pausar el trámite incompleto actual y crear uno nuevo), discard_and_new (anular el trámite incompleto actual y crear uno nuevo), new_beneficiary (nuevo trámite para familiar/conocido).",
           },
           targetCaseId: {
             type: "string",
@@ -545,10 +598,20 @@ const ORCHESTRATOR_TOOLS = [
     function: {
       name: "confirm_appointment",
       description:
-        "Finaliza y confirma oficialmente la cita generando Folio y código QR. Exige estudio, clínica, fecha y hora, forma de pago y nombre/apellido paterno del paciente. Si el usuario indica forma de pago o fecha/hora al confirmar, pueden pasarse aquí.",
+        "Finaliza y confirma oficialmente la cita generando Folio y código QR. Exige estudio, clínica, fecha y hora, forma de pago y nombre/apellido paterno del paciente. Si el usuario indica alguno de estos campos al confirmar, pueden pasarse aquí directamente.",
       parameters: {
         type: "object",
         properties: {
+          studyCode: {
+            type: "string",
+            enum: STUDIES_CATALOG.map((s) => s.code),
+            description: "Código del estudio si aún no se había guardado (opcional).",
+          },
+          clinicId: {
+            type: "string",
+            enum: CLINICS_CATALOG.map((c) => c.id),
+            description: "ID de clínica si aún no se había guardado (opcional).",
+          },
           paymentMethod: {
             type: "string",
             enum: ["online", "oxxo", "clinic"],
@@ -561,6 +624,70 @@ const ORCHESTRATOR_TOOLS = [
           preferredTime: {
             type: "string",
             description: "Hora HH:MM si la menciona al confirmar (opcional).",
+          },
+          nombres: {
+            type: "string",
+            description: "Nombre(s) del paciente si los da al confirmar (opcional).",
+          },
+          apellidoPaterno: {
+            type: "string",
+            description: "Apellido paterno del paciente si lo da al confirmar (opcional).",
+          },
+          apellidoMaterno: {
+            type: "string",
+            description: "Apellido materno del paciente si lo da al confirmar (opcional).",
+          },
+          telefono: {
+            type: "string",
+            description: "Teléfono del paciente si lo da al confirmar (opcional).",
+          },
+          email: {
+            type: "string",
+            description: "Correo del paciente si lo da al confirmar (opcional).",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit_confirmed_appointment",
+      description:
+        "Edita o reagenda una cita YA CONFIRMADA previamente del paciente (cambiando estudio, clínica, fecha, horario y/o forma de pago) conservando su folio y sincronizando los cambios al instante en Call Center, Admin y Mi Cuenta.",
+      parameters: {
+        type: "object",
+        properties: {
+          caseId: {
+            type: "string",
+            description: "UUID de la cita confirmada a editar (opcional si se proporciona folio o solo hay una).",
+          },
+          folio: {
+            type: "string",
+            description: "Folio de la cita confirmada a editar, ej. SD-2026-1234 (opcional).",
+          },
+          studyCode: {
+            type: "string",
+            enum: STUDIES_CATALOG.map((s) => s.code),
+            description: "Nuevo código de estudio oficial si desea cambiarlo (opcional).",
+          },
+          clinicId: {
+            type: "string",
+            enum: CLINICS_CATALOG.map((c) => c.id),
+            description: "Nuevo ID de clínica oficial si desea cambiarla (opcional).",
+          },
+          preferredDate: {
+            type: "string",
+            description: "Nueva fecha YYYY-MM-DD (opcional).",
+          },
+          preferredTime: {
+            type: "string",
+            description: `Nuevo horario HH:MM (${AVAILABLE_TIME_SLOTS.join(", ")}) (opcional).`,
+          },
+          paymentMethod: {
+            type: "string",
+            enum: ["online", "oxxo", "clinic"],
+            description: "Nueva forma de pago (opcional).",
           },
         },
       },
@@ -736,14 +863,29 @@ export async function runSmartWhatsAppAssistant(params: {
     "",
     "REGLAS ESTRICTAS DE ARQUITECTURA Y SEGURIDAD (NUNCA ROMPER):",
     "1. Usa EXCLUSIVAMENTE estudios, códigos, precios, preparaciones y clínicas del catálogo oficial. JAMÁS inventes precios, folios, códigos QR ni disponibilidad.",
-    "2. Ejecuta SIEMPRE las herramientas (tools) cuando el paciente elija o modifique estudio, clínica, fecha/hora, datos personales, forma de pago, quiera pausar/guardar borrador, consultar sus citas, cambiar de trámite, agendar para un familiar, escalar a Call Center o confirmar.",
-    "3. Puedes combinar múltiples tools en el mismo turno (ej. `quote_study` + `select_clinic_and_slot` + `set_payment_method` si el usuario da varios datos en un solo mensaje).",
-    "4. ANTES de llamar `confirm_appointment`, asegúrate de contar con: estudio, clínica, fecha y hora, forma de pago y nombre + apellido paterno del paciente. Si falta alguno, pídelo de forma breve y clara antes de confirmar. Solo confirma cuando el paciente exprese intención clara de agendar/confirmar.",
+    "2. SINCRONIZACIÓN OBLIGATORIA EN TIEMPO REAL: Ejecuta SIEMPRE la herramienta correspondiente EN EL MISMO TURNO en que el usuario proporcione o elija información (NO respondas solo con texto):",
+    "   - Si el usuario menciona, elige o confirma un estudio (con o sin acentos, ej. 'quimica sanguinea', 'biometria', 'ultrasonido'), llama INMEDIATAMENTE `quote_study` en ese mismo turno.",
+    "   - Si elige clínica y/o fecha/hora, llama `select_clinic_and_slot` (si `Estudio actual` aún dice 'Ninguno aún', pasa también `studyCode` o llama `quote_study` junto con `select_clinic_and_slot`).",
+    "   - En cuanto el usuario escriba su nombre, apellido, teléfono, correo, fecha de nacimiento, género, estado o CURP, llama INMEDIATAMENTE `update_patient_profile` en ese mismo turno para que Call Center y Admin muestren su nombre real y el resumen actualizado al instante.",
+    "   - Si indica forma de pago (`online`, `oxxo` o `clinic`), llama `set_payment_method`.",
+    "3. Puedes combinar múltiples tools en el mismo turno (ej. `quote_study` + `select_clinic_and_slot`, o `update_patient_profile` + `set_payment_method` + `confirm_appointment`).",
+    "4. PROHIBIDO ABSOLUTO ALUCINAR CONFIRMACIÓN: NUNCA digas que la cita quedó confirmada, reservada o agendada ni muestres un folio si NO ejecutaste `confirm_appointment` con `ok: true` en este turno (o si ya existía un `Folio confirmado` real). Antes de confirmar asegúrate de tener: estudio, clínica, fecha/hora, forma de pago y nombre + apellido paterno. Los campos extra de perfil (CURP, fecha de nacimiento, correo o cuenta web) son OPCIONALES: si el usuario no desea darlos ahora o los omite, NO bloquees la confirmación si ya tienes los 5 datos obligatorios.",
     "5. Privacidad LFPDPPP: NUNCA pidas ni repitas códigos OTP ni CURPs completas en texto abierto innecesariamente; recuerda al usuario que sus datos y CURP se protegen automáticamente en el servidor. Si el usuario menciona familiares, valida autorización (`consentAccepted: true`) antes de usar `switch_or_create_case` con `new_beneficiary`.",
     "6. Si el usuario pregunta por citas iniciadas en Web o Call Center, estatus, folios o historial, usa `get_patient_context` para responder con información exacta y actualizada de todos los canales. Si el chat llegó con identificador privado (@lid) o el usuario indica un teléfono/correo distinto para encontrar su cuenta web, usa `link_existing_account` para sincronizar todo su historial al instante.",
-    "7. Si el usuario dice que continúa después o quiere pausar, llama `pause_case_for_later` y confírmale que podrá retomar exactamente en el mismo paso desde Sitio Web, WhatsApp o Call Center.",
-    "8. Si pide hablar con un humano o tiene una duda médica compleja, llama `log_question_or_escalate` con `requestAdvisor: true` para que aparezca de inmediato en la pantalla del asesor de Call Center.",
-    "9. Formato WhatsApp limpio y conciso (máximo 10 líneas, usa *negritas* y viñetas claras, y cierra siempre con el siguiente paso concreto).",
+    "7. CITA A MEDIAS + SOLICITUD DE NUEVA CITA (OBLIGATORIO): Si el trámite activo NO está confirmado (`currentState !== CITA_CONFIRMADA`) y ya tiene avance (estudio, clínica u horario), y el usuario pide iniciar/crear otra cita nueva, ANTES de crearla debes preguntarle exactamente estas dos opciones:",
+    "   a) ¿Quieres *guardar tu cita actual* y retomarla en otro momento?",
+    "   b) ¿Quieres *anular esta cita* y generar una nueva?",
+    "   Cuando responda (a), llama `switch_or_create_case({ action: \"pause_and_new\" })`. Cuando responda (b), llama `switch_or_create_case({ action: \"discard_and_new\" })`. Si el trámite activo YA está confirmado (`CITA_CONFIRMADA`) y el usuario quiere agendar otra cita nueva, NO le repitas el resumen de la cita ya confirmada: llama directamente `switch_or_create_case({ action: \"new_self\" })` para abrir un nuevo registro.",
+    "8. EDICIÓN DE CITAS CONFIRMADAS: Si el usuario pide editar, modificar o reagendar una cita ya registrada/confirmada (cambiar estudio, clínica, fecha, horario o forma de pago), consulta con `get_patient_context` si hay varias citas para confirmar qué folio editar, y aplica los cambios con `edit_confirmed_appointment`.",
+    "9. MENÚ RÁPIDO VÍA CHAT: Cuando el usuario salude sin petición concreta, escriba 'MENÚ'/'OPCIONES'/'0' o elija una opción numérica del menú rápido, presenta/atiende estas opciones numeradas:",
+    "   1️⃣ Agendar o cotizar una nueva cita",
+    "   2️⃣ Ver mis citas y folios activos",
+    "   3️⃣ Editar o reagendar una cita confirmada",
+    "   4️⃣ Ver estudios, precios y clínicas",
+    "   5️⃣ Pausar o cambiar de trámite",
+    "   6️⃣ Hablar con un asesor de Call Center",
+    "10. Si el usuario dice que continúa después o quiere pausar, llama `pause_case_for_later` y confírmale que podrá retomar exactamente en el mismo paso desde Sitio Web, WhatsApp o Call Center. Si pide hablar con un humano o tiene una duda médica compleja, llama `log_question_or_escalate` con `requestAdvisor: true`.",
+    "11. Formato WhatsApp limpio y conciso (máximo 12 líneas, usa *negritas* y viñetas claras, y cierra siempre con el siguiente paso concreto o recordatorio breve de escribir *MENÚ*).",
     "",
     `FECHA ACTUAL: ${todayIso}`,
     `CHAT CON IDENTIFICADOR PRIVADO (@lid SIN TELÉFONO VISIBLE): ${params.isUnresolvedLid ? "SÍ (pide teléfono de 10 dígitos o correo para vincular con su cuenta web si pregunta por citas previas o antes de confirmar)" : "NO"}`,
@@ -881,16 +1023,16 @@ export async function runSmartWhatsAppAssistant(params: {
 
     if (name === "search_catalog") {
       const type = String(args.type || "both");
-      const q = String(args.query || "").trim().toLowerCase();
+      const q = normalizeSearchText(String(args.query || ""));
       const matchedStudies =
         type === "clinics"
           ? []
           : STUDIES_CATALOG.filter(
               (s) =>
                 !q ||
-                s.name.toLowerCase().includes(q) ||
-                s.category.toLowerCase().includes(q) ||
-                s.code.toLowerCase().includes(q)
+                normalizeSearchText(s.name).includes(q) ||
+                normalizeSearchText(s.category).includes(q) ||
+                normalizeSearchText(s.code).includes(q)
             ).map((s) => ({
               ...s,
               onlinePrice: Math.round(s.price * 0.9),
@@ -901,9 +1043,10 @@ export async function runSmartWhatsAppAssistant(params: {
           : CLINICS_CATALOG.filter(
               (c) =>
                 !q ||
-                c.name.toLowerCase().includes(q) ||
-                c.city.toLowerCase().includes(q) ||
-                c.address.toLowerCase().includes(q)
+                normalizeSearchText(c.name).includes(q) ||
+                normalizeSearchText(c.city).includes(q) ||
+                normalizeSearchText(c.address).includes(q) ||
+                normalizeSearchText(c.id).includes(q)
             );
       return {
         ok: true,
@@ -953,6 +1096,7 @@ export async function runSmartWhatsAppAssistant(params: {
       const clinic = findClinicById(String(args.clinicId || ""));
       if (!clinic) return { ok: false, error: "ID de clínica inválido." };
       const curCtx = (currentCase.contextJson ?? {}) as CaseContextJson;
+      const studyOverride = args.studyCode ? findStudyByCode(String(args.studyCode)) : undefined;
       const preferredDate = args.preferredDate
         ? String(args.preferredDate)
         : curCtx.preferred_slot?.date;
@@ -969,6 +1113,16 @@ export async function runSmartWhatsAppAssistant(params: {
         eventType: EventType.CLINIC_SELECTED,
         correlationId: params.correlationId,
         contextPatch: {
+          ...(studyOverride
+            ? {
+                study: {
+                  code: studyOverride.code,
+                  name: studyOverride.name,
+                  price: studyOverride.price,
+                  prep: studyOverride.prep,
+                },
+              }
+            : {}),
           clinic: {
             id: clinic.id,
             name: clinic.name,
@@ -986,6 +1140,7 @@ export async function runSmartWhatsAppAssistant(params: {
         },
         eventPayload: {
           clinicId: clinic.id,
+          ...(studyOverride ? { studyCode: studyOverride.code } : {}),
           preferredDate: preferredDate ?? null,
           preferredTime: preferredTime ?? null,
           via: "ai_nlu",
@@ -995,6 +1150,7 @@ export async function runSmartWhatsAppAssistant(params: {
       return {
         ok: true,
         state: currentCase.currentState,
+        study: ((currentCase.contextJson ?? {}) as CaseContextJson).study ?? null,
         clinic,
         preferredSlot: ((currentCase.contextJson ?? {}) as CaseContextJson).preferred_slot ?? null,
         missingForConfirmation: getMissingConfirmationRequirements(
@@ -1041,13 +1197,16 @@ export async function runSmartWhatsAppAssistant(params: {
       const existing = await prisma.patient.findUnique({ where: { id: currentCase.patientId } });
       if (!existing) return { ok: false, error: "Expediente de paciente no encontrado." };
 
-      const firstName = args.nombres ? String(args.nombres).trim() : existing.firstName;
-      const paternalLastName = args.apellidoPaterno
-        ? String(args.apellidoPaterno).trim()
-        : existing.paternalLastName;
-      const maternalLastName = args.apellidoMaterno
-        ? String(args.apellidoMaterno).trim()
-        : existing.maternalLastName;
+      const parsedNames = splitFullNameIfNeeded(
+        args.nombres ? String(args.nombres) : undefined,
+        args.apellidoPaterno ? String(args.apellidoPaterno) : undefined,
+        args.apellidoMaterno ? String(args.apellidoMaterno) : undefined
+      );
+      const firstName = normalizePersonName(parsedNames.firstName) ?? existing.firstName;
+      const paternalLastName =
+        normalizePersonName(parsedNames.paternalLastName) ?? existing.paternalLastName;
+      const maternalLastName =
+        normalizePersonName(parsedNames.maternalLastName) ?? existing.maternalLastName;
       const birthDateStr = args.fechaNacimiento
         ? String(args.fechaNacimiento).trim()
         : existing.birthDate
@@ -1063,13 +1222,12 @@ export async function runSmartWhatsAppAssistant(params: {
         ? resolveMexicanState(String(args.estadoNacimiento))
         : null;
       const birthState =
-        resolvedState?.name ||
-        (args.estadoNacimiento ? String(args.estadoNacimiento).trim() : existing.birthState);
-      const country = args.pais ? String(args.pais).trim().toUpperCase() : existing.country;
-      const emailArg =
-        args.email && String(args.email).includes("@")
-          ? String(args.email).trim().toLowerCase()
-          : undefined;
+        normalizePlaceName(resolvedState?.name) ||
+        normalizePlaceName(args.estadoNacimiento ? String(args.estadoNacimiento) : undefined) ||
+        existing.birthState;
+      const country =
+        normalizePlaceName(args.pais ? String(args.pais) : undefined) ?? existing.country;
+      const emailArg = normalizeEmail(args.email ? String(args.email) : undefined);
       const phoneArg =
         args.telefono && String(args.telefono).replace(/\D/g, "").length >= 10
           ? normalizePhone(String(args.telefono))
@@ -1104,6 +1262,25 @@ export async function runSmartWhatsAppAssistant(params: {
             );
           }
           currentCase = await prisma.serviceCase.findUniqueOrThrow({ where: { id: currentCase.id } });
+          const nextStateAfterMerge =
+            currentCase.currentState === CaseState.INICIADO
+              ? CaseState.EN_PROGRESO
+              : currentCase.currentState;
+          const syncedMerge = await transitionServiceCase({
+            caseId: currentCase.id,
+            expectedVersion: currentCase.version,
+            nextState: nextStateAfterMerge,
+            channel: Channel.WHATSAPP,
+            actorRole: ActorRole.PATIENT,
+            eventType: EventType.IDENTITY_LINKED,
+            correlationId: params.correlationId,
+            eventPayload: {
+              via: "ai_nlu",
+              linkedToExistingAccount: true,
+              syncedCasesCount: merged.syncedCasesCount,
+            },
+          });
+          currentCase = syncedMerge.updatedCase;
           switchedCaseId = currentCase.id;
           return {
             ok: true,
@@ -1181,20 +1358,26 @@ export async function runSmartWhatsAppAssistant(params: {
         await upsertIdentityLink(activePatient.id, IdentifierType.EMAIL, emailArg, false);
       }
 
-      await recordAndPublishEvent({
+      const nextStateAfterProfile =
+        currentCase.currentState === CaseState.INICIADO
+          ? CaseState.EN_PROGRESO
+          : currentCase.currentState;
+
+      const syncedProfile = await transitionServiceCase({
         caseId: currentCase.id,
-        patientId: activePatient.id,
-        journeyId: currentCase.journeyId,
-        correlationId: params.correlationId,
+        expectedVersion: currentCase.version,
+        nextState: nextStateAfterProfile,
         channel: Channel.WHATSAPP,
         actorRole: ActorRole.PATIENT,
         eventType: EventType.IDENTITY_LINKED,
-        payload: {
+        correlationId: params.correlationId,
+        eventPayload: {
           via: "ai_nlu",
           updatedProfile: true,
           curpSaved: Boolean(finalCurp),
         },
       });
+      currentCase = syncedProfile.updatedCase;
 
       return {
         ok: true,
@@ -1214,10 +1397,7 @@ export async function runSmartWhatsAppAssistant(params: {
         args.telefono && String(args.telefono).replace(/\D/g, "").length >= 10
           ? normalizePhone(String(args.telefono))
           : undefined;
-      const emailArg =
-        args.email && String(args.email).includes("@")
-          ? String(args.email).trim().toLowerCase()
-          : undefined;
+      const emailArg = normalizeEmail(args.email ? String(args.email) : undefined);
 
       if (!phoneArg && !emailArg && !rawCurpInMessage) {
         return {
@@ -1253,6 +1433,20 @@ export async function runSmartWhatsAppAssistant(params: {
           if (emailArg) {
             await upsertIdentityLink(activePatient.id, IdentifierType.EMAIL, emailArg, false);
           }
+          const syncedContact = await transitionServiceCase({
+            caseId: currentCase.id,
+            expectedVersion: currentCase.version,
+            nextState:
+              currentCase.currentState === CaseState.INICIADO
+                ? CaseState.EN_PROGRESO
+                : currentCase.currentState,
+            channel: Channel.WHATSAPP,
+            actorRole: ActorRole.PATIENT,
+            eventType: EventType.IDENTITY_LINKED,
+            correlationId: params.correlationId,
+            eventPayload: { via: "ai_nlu", contactUpdated: true },
+          });
+          currentCase = syncedContact.updatedCase;
         }
         return {
           ok: true,
@@ -1285,6 +1479,24 @@ export async function runSmartWhatsAppAssistant(params: {
       }
 
       currentCase = await prisma.serviceCase.findUniqueOrThrow({ where: { id: currentCase.id } });
+      const syncedLink = await transitionServiceCase({
+        caseId: currentCase.id,
+        expectedVersion: currentCase.version,
+        nextState:
+          currentCase.currentState === CaseState.INICIADO
+            ? CaseState.EN_PROGRESO
+            : currentCase.currentState,
+        channel: Channel.WHATSAPP,
+        actorRole: ActorRole.PATIENT,
+        eventType: EventType.IDENTITY_LINKED,
+        correlationId: params.correlationId,
+        eventPayload: {
+          via: "ai_nlu",
+          foundExistingWebAccount: true,
+          syncedCasesCount,
+        },
+      });
+      currentCase = syncedLink.updatedCase;
       switchedCaseId = currentCase.id;
 
       const linkedCases = await prisma.serviceCase.findMany({
@@ -1436,7 +1648,38 @@ export async function runSmartWhatsAppAssistant(params: {
         };
       }
 
-      if (action === "new_self") {
+      if (action === "new_self" || action === "pause_and_new" || action === "discard_and_new") {
+        if (
+          (action === "pause_and_new" || action === "discard_and_new") &&
+          currentCase.currentState !== CaseState.CITA_CONFIRMADA
+        ) {
+          const isDiscard = action === "discard_and_new";
+          await transitionServiceCase({
+            caseId: currentCase.id,
+            expectedVersion: currentCase.version,
+            nextState: CaseState.PAUSADO_PENDIENTE,
+            channel: Channel.WHATSAPP,
+            actorRole: ActorRole.PATIENT,
+            eventType: EventType.FLOW_INTERRUPTED,
+            correlationId: params.correlationId,
+            ...(isDiscard
+              ? {
+                  contextPatch: {
+                    cancelled: true,
+                    cancelled_reason: "ANULADA_POR_PACIENTE_PARA_NUEVA_CITA",
+                  },
+                }
+              : {}),
+            eventPayload: {
+              via: "ai_nlu",
+              reason: isDiscard
+                ? "PATIENT_DISCARDED_CASE_FOR_NEW"
+                : "PATIENT_PAUSED_CASE_FOR_NEW",
+              cancelled: isDiscard,
+            },
+          });
+        }
+
         const created = await prisma.serviceCase.create({
           data: {
             patientId: params.holder.id,
@@ -1458,13 +1701,20 @@ export async function runSmartWhatsAppAssistant(params: {
           eventType: EventType.SESSION_STARTED,
           prevState: null,
           nextState: CaseState.INICIADO,
-          payload: { via: "ai_nlu", action: "new_self" },
+          payload: { via: "ai_nlu", action },
         });
         currentCase = created;
         activePatient = await prisma.patient.findUnique({ where: { id: params.holder.id } });
         switchedCaseId = created.id;
         return {
           ok: true,
+          action,
+          previousCaseAction:
+            action === "discard_and_new"
+              ? "anulada"
+              : action === "pause_and_new"
+              ? "guardada_para_despues"
+              : "ninguna",
           createdCaseId: created.id,
           state: created.currentState,
           missingForConfirmation: getMissingConfirmationRequirements({}, activePatient),
@@ -1624,10 +1874,64 @@ export async function runSmartWhatsAppAssistant(params: {
     }
 
     if (name === "confirm_appointment") {
-      const freshPatient = await prisma.patient.findUnique({ where: { id: currentCase.patientId } });
+      let freshPatient = await prisma.patient.findUnique({ where: { id: currentCase.patientId } });
+
+      // Si el modelo pasó datos básicos del paciente al confirmar, los guardamos primero en BD
+      const confirmNames = splitFullNameIfNeeded(
+        args.nombres ? String(args.nombres) : undefined,
+        args.apellidoPaterno ? String(args.apellidoPaterno) : undefined,
+        args.apellidoMaterno ? String(args.apellidoMaterno) : undefined
+      );
+      const normConfirmFirst = normalizePersonName(confirmNames.firstName);
+      const normConfirmPat = normalizePersonName(confirmNames.paternalLastName);
+      const normConfirmMat = normalizePersonName(confirmNames.maternalLastName);
+      const confirmPhone =
+        args.telefono && String(args.telefono).replace(/\D/g, "").length >= 10
+          ? normalizePhone(String(args.telefono))
+          : undefined;
+      const confirmEmail = normalizeEmail(args.email ? String(args.email) : undefined);
+
+      if (
+        freshPatient &&
+        (normConfirmFirst ||
+          normConfirmPat ||
+          normConfirmMat ||
+          (confirmPhone && !freshPatient.phone) ||
+          (confirmEmail && !freshPatient.email))
+      ) {
+        const patchPatient: Record<string, unknown> = {
+          ...(normConfirmFirst ? { firstName: normConfirmFirst } : {}),
+          ...(normConfirmPat ? { paternalLastName: normConfirmPat } : {}),
+          ...(normConfirmMat ? { maternalLastName: normConfirmMat } : {}),
+          ...(confirmPhone && !freshPatient.phone ? { phone: confirmPhone } : {}),
+        };
+        if (confirmEmail && !freshPatient.email) {
+          const taken = await prisma.patient.findUnique({ where: { email: confirmEmail } });
+          if (!taken) patchPatient.email = confirmEmail;
+        }
+        if (Object.keys(patchPatient).length > 0) {
+          freshPatient = await prisma.patient.update({
+            where: { id: freshPatient.id },
+            data: patchPatient,
+          });
+          if (confirmPhone) {
+            await upsertIdentityLink(freshPatient.id, IdentifierType.PHONE, confirmPhone, false);
+          }
+          if (confirmEmail && freshPatient.email === confirmEmail) {
+            await upsertIdentityLink(freshPatient.id, IdentifierType.EMAIL, confirmEmail, false);
+          }
+        }
+      }
+
       activePatient = freshPatient;
       const curCtx = (currentCase.contextJson ?? {}) as CaseContextJson;
 
+      const effectiveStudy = args.studyCode
+        ? findStudyByCode(String(args.studyCode)) ?? curCtx.study
+        : curCtx.study;
+      const effectiveClinic = args.clinicId
+        ? findClinicById(String(args.clinicId)) ?? curCtx.clinic
+        : curCtx.clinic;
       const effectivePayment =
         (args.paymentMethod as PaymentMethod | undefined) || curCtx.payment_method;
       const effectiveSlot =
@@ -1637,6 +1941,26 @@ export async function runSmartWhatsAppAssistant(params: {
 
       const mergedCheckCtx: CaseContextJson = {
         ...curCtx,
+        ...(effectiveStudy
+          ? {
+              study: {
+                code: effectiveStudy.code,
+                name: effectiveStudy.name,
+                price: effectiveStudy.price,
+                prep: effectiveStudy.prep,
+              },
+            }
+          : {}),
+        ...(effectiveClinic
+          ? {
+              clinic: {
+                id: effectiveClinic.id,
+                name: effectiveClinic.name,
+                city: effectiveClinic.city,
+                address: effectiveClinic.address,
+              },
+            }
+          : {}),
         ...(effectivePayment ? { payment_method: effectivePayment } : {}),
         ...(effectiveSlot ? { preferred_slot: effectiveSlot } : {}),
       };
@@ -1667,6 +1991,8 @@ export async function runSmartWhatsAppAssistant(params: {
         eventType: EventType.APPOINTMENT_CONFIRMED,
         correlationId: params.correlationId,
         contextPatch: {
+          study: mergedCheckCtx.study,
+          clinic: mergedCheckCtx.clinic,
           payment_method: effectivePayment,
           preferred_slot: effectiveSlot,
           appointment_folio: folio,
@@ -1696,12 +2022,169 @@ export async function runSmartWhatsAppAssistant(params: {
       };
     }
 
+    if (name === "edit_confirmed_appointment") {
+      const targetId = args.caseId ? String(args.caseId).trim() : undefined;
+      const targetFolio = args.folio ? String(args.folio).trim().toUpperCase() : undefined;
+
+      const confirmedCases = await prisma.serviceCase.findMany({
+        where: {
+          OR: [{ requesterPatientId: params.holder.id }, { patientId: params.holder.id }],
+          currentState: CaseState.CITA_CONFIRMADA,
+        },
+        include: {
+          patient: { select: { firstName: true, paternalLastName: true } },
+        },
+        orderBy: { updatedAt: "desc" },
+        take: 10,
+      });
+
+      if (confirmedCases.length === 0) {
+        return {
+          ok: false,
+          error: "No hay citas confirmadas registradas para este usuario todavía.",
+        };
+      }
+
+      let targetCase = confirmedCases.find((c) => targetId && c.id === targetId);
+      if (!targetCase && targetFolio) {
+        targetCase = confirmedCases.find((c) => {
+          const cCtx = (c.contextJson ?? {}) as CaseContextJson;
+          return cCtx.appointment_folio?.toUpperCase() === targetFolio;
+        });
+      }
+      if (!targetCase && currentCase.currentState === CaseState.CITA_CONFIRMADA) {
+        targetCase = confirmedCases.find((c) => c.id === currentCase.id);
+      }
+      if (!targetCase && confirmedCases.length === 1) {
+        targetCase = confirmedCases[0];
+      }
+      if (!targetCase) {
+        return {
+          ok: false,
+          error: "El paciente tiene varias citas confirmadas. Pregunta qué folio desea modificar.",
+          confirmedAppointments: confirmedCases.map((c) => {
+            const cCtx = (c.contextJson ?? {}) as CaseContextJson;
+            return {
+              caseId: c.id,
+              folio: cCtx.appointment_folio ?? null,
+              study: cCtx.study?.name ?? null,
+              clinic: cCtx.clinic?.name ?? null,
+              slot: cCtx.preferred_slot ?? null,
+            };
+          }),
+        };
+      }
+
+      const prevCtx = (targetCase.contextJson ?? {}) as CaseContextJson;
+      const nextStudy = args.studyCode ? findStudyByCode(String(args.studyCode)) : undefined;
+      const nextClinic = args.clinicId ? findClinicById(String(args.clinicId)) : undefined;
+      const nextDate = args.preferredDate
+        ? String(args.preferredDate).trim()
+        : prevCtx.preferred_slot?.date;
+      const nextTime = args.preferredTime
+        ? String(args.preferredTime).trim()
+        : prevCtx.preferred_slot?.time;
+      const nextPayment =
+        args.paymentMethod === "online" ||
+        args.paymentMethod === "oxxo" ||
+        args.paymentMethod === "clinic"
+          ? (args.paymentMethod as PaymentMethod)
+          : prevCtx.payment_method;
+
+      if (!nextStudy && !nextClinic && !args.preferredDate && !args.preferredTime && !args.paymentMethod) {
+        return {
+          ok: false,
+          error:
+            "Indica al menos un cambio a aplicar (estudio, clínica, fecha, horario o forma de pago).",
+          currentAppointment: {
+            caseId: targetCase.id,
+            folio: prevCtx.appointment_folio ?? null,
+            study: prevCtx.study ?? null,
+            clinic: prevCtx.clinic ?? null,
+            preferredSlot: prevCtx.preferred_slot ?? null,
+            paymentMethod: prevCtx.payment_method ?? null,
+          },
+        };
+      }
+
+      const effectiveStudy = nextStudy
+        ? { code: nextStudy.code, name: nextStudy.name, price: nextStudy.price, prep: nextStudy.prep }
+        : prevCtx.study;
+      const effectiveClinic = nextClinic
+        ? {
+            id: nextClinic.id,
+            name: nextClinic.name,
+            city: nextClinic.city,
+            address: nextClinic.address,
+          }
+        : prevCtx.clinic;
+      const folio = prevCtx.appointment_folio || `SD-2026-${crypto.randomInt(1000, 9999)}`;
+      const qrPayload = `SALUDDIGNA|${folio}|${effectiveStudy?.code ?? "EST"}|${effectiveClinic?.id ?? "CLN"}`;
+      const basePrice = effectiveStudy?.price ?? 0;
+      const finalPrice = nextPayment === "online" ? Math.round(basePrice * 0.9) : basePrice;
+
+      const res = await transitionServiceCase({
+        caseId: targetCase.id,
+        expectedVersion: targetCase.version,
+        nextState: CaseState.CITA_CONFIRMADA,
+        channel: Channel.WHATSAPP,
+        actorRole: ActorRole.PATIENT,
+        eventType: EventType.CONTEXT_REHYDRATED,
+        correlationId: params.correlationId,
+        contextPatch: {
+          ...(effectiveStudy ? { study: effectiveStudy } : {}),
+          ...(effectiveClinic ? { clinic: effectiveClinic } : {}),
+          ...(nextDate || nextTime
+            ? {
+                preferred_slot: {
+                  date: nextDate || todayIso,
+                  time: nextTime || "09:30",
+                },
+              }
+            : {}),
+          ...(nextPayment ? { payment_method: nextPayment } : {}),
+          appointment_folio: folio,
+          qr_payload: qrPayload,
+        },
+        eventPayload: {
+          via: "ai_nlu",
+          editedConfirmedAppointment: true,
+          folio,
+          changes: {
+            ...(nextStudy ? { studyCode: nextStudy.code } : {}),
+            ...(nextClinic ? { clinicId: nextClinic.id } : {}),
+            ...(args.preferredDate ? { preferredDate: nextDate } : {}),
+            ...(args.preferredTime ? { preferredTime: nextTime } : {}),
+            ...(args.paymentMethod ? { paymentMethod: nextPayment } : {}),
+          },
+        },
+      });
+
+      if (targetCase.id === currentCase.id) {
+        currentCase = res.updatedCase;
+      }
+
+      return {
+        ok: true,
+        edited: true,
+        caseId: targetCase.id,
+        folio,
+        qrPayload,
+        study: effectiveStudy ?? null,
+        clinic: effectiveClinic ?? null,
+        preferredSlot: nextDate || nextTime ? { date: nextDate || todayIso, time: nextTime || "09:30" } : null,
+        paymentMethod: nextPayment ?? null,
+        paymentLabel: getPaymentMethodLabel(nextPayment),
+        finalPrice,
+      };
+    }
+
     return { ok: false, error: `Herramienta desconocida: ${name}` };
   };
 
   try {
-    // Hasta 2 rondas de tool calling (por ejemplo: consultar contexto y luego ejecutar acción)
-    for (let round = 0; round < 2; round++) {
+    // Hasta 5 rondas de tool calling para completar flujos multipaso (cotizar + clínica + perfil + pago + confirmar)
+    for (let round = 0; round < 5; round++) {
       const assistantMsg = await callOpenAi(messages, true);
 
       if (!assistantMsg.tool_calls || assistantMsg.tool_calls.length === 0) {
@@ -1716,7 +2199,13 @@ export async function runSmartWhatsAppAssistant(params: {
         tool_calls: assistantMsg.tool_calls,
       });
 
-      for (const tc of assistantMsg.tool_calls) {
+      // Ordenar para que confirm_appointment siempre se ejecute después de tools que actualizan estudio/clínica/perfil/pago
+      const orderedToolCalls = [...assistantMsg.tool_calls].sort((a, b) => {
+        const prio = (fnName: string) => (fnName === "confirm_appointment" ? 100 : 10);
+        return prio(a.function.name) - prio(b.function.name);
+      });
+
+      for (const tc of orderedToolCalls) {
         let args: Record<string, unknown> = {};
         try {
           args = tc.function.arguments
@@ -1744,7 +2233,18 @@ export async function runSmartWhatsAppAssistant(params: {
       }
     }
 
-    // Pasada final para redactar la respuesta clara basada en los resultados reales de las tools
+    // Pasada final para redactar la respuesta clara basada EXCLUSIVAMENTE en el estado real guardado en BD
+    const finalCtx = (currentCase.contextJson ?? {}) as CaseContextJson;
+    const finalMissing = getMissingConfirmationRequirements(finalCtx, activePatient);
+    messages.push({
+      role: "system",
+      content:
+        `ESTADO REAL VERIFICADO EN BASE DE DATOS TRAS LAS HERRAMIENTAS: ` +
+        `estado=${currentCase.currentState}, folio=${finalCtx.appointment_folio ?? "NINGUNO"}, ` +
+        `confirmada=${confirmed ? "SÍ" : "NO"}, faltantes=${finalMissing.length > 0 ? finalMissing.join(", ") : "ninguno"}. ` +
+        `Responde al paciente reflejando ÚNICAMENTE este estado real (nunca afirmes que la cita quedó confirmada si confirmada=NO y folio=NINGUNO).`,
+    });
+
     const finalReply = await callOpenAi(messages, false);
     const textOut = finalReply.content?.trim();
     if (!textOut) return null;

@@ -328,6 +328,7 @@ export const api = {
       expectedVersion: number;
       preferredDate?: string;
       preferredTime?: string;
+      paymentMethod?: "online" | "oxxo" | "clinic";
       advisorNotes?: string;
     }
   ) =>
@@ -338,6 +339,26 @@ export const api = {
       correlationId: string;
     }>(`/api/call-center/cases/${caseId}/confirm`, {
       method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+
+  updateCallCenterCase: (
+    token: string,
+    caseId: string,
+    payload: {
+      expectedVersion: number;
+      studyCode?: string;
+      clinicId?: string;
+      preferredDate?: string;
+      preferredTime?: string;
+      paymentMethod?: "online" | "oxxo" | "clinic";
+      advisorNotes?: string;
+      action?: "save" | "pause" | "reopen";
+    }
+  ) =>
+    request<{ case: ServiceCase; correlationId: string }>(`/api/call-center/cases/${caseId}`, {
+      method: "PATCH",
       token,
       body: JSON.stringify(payload),
     }),
@@ -484,6 +505,53 @@ export const api = {
     request<{ caseId: string; count: number; events: JourneyEventItem[] }>(
       `/api/admin/cases/${caseId}/timeline`,
       { token }
+    ),
+
+  updateAdminCase: (
+    token: string,
+    caseId: string,
+    payload: {
+      expectedVersion: number;
+      studyCode?: string;
+      clinicId?: string;
+      preferredDate?: string;
+      preferredTime?: string;
+      paymentMethod?: "online" | "oxxo" | "clinic";
+      nextState?: string;
+      cancelled?: boolean;
+      adminNotes?: string;
+    }
+  ) =>
+    request<{ case: ServiceCase; correlationId: string }>(`/api/admin/cases/${caseId}`, {
+      method: "PATCH",
+      token,
+      body: JSON.stringify(payload),
+    }),
+
+  updateAdminUser: (
+    token: string,
+    patientId: string,
+    payload: {
+      firstName?: string;
+      paternalLastName?: string;
+      maternalLastName?: string | null;
+      birthDate?: string | null;
+      gender?: string | null;
+      birthState?: string | null;
+      country?: string | null;
+      curp?: string | null;
+      phone?: string | null;
+      email?: string | null;
+      newPassword?: string;
+    }
+  ) =>
+    request<{ patient: Record<string, unknown>; updatedFields: string[] }>(
+      `/api/admin/users/${patientId}`,
+      {
+        method: "PATCH",
+        token,
+        body: JSON.stringify(payload),
+      }
     ),
 
   resetDemo: (token: string) =>

@@ -16,7 +16,12 @@ import {
   hashOtp,
   maskIdentifier,
   maskPatientName,
+  normalizeCurp,
+  normalizeEmail,
+  normalizePersonName,
   normalizePhone,
+  normalizePlaceName,
+  stripAccents,
 } from "../lib/crypto";
 import { recordAndPublishEvent } from "./eventBus";
 
@@ -93,7 +98,9 @@ export async function upsertIdentityLink(
   const normalized =
     identifierType === IdentifierType.PHONE
       ? normalizePhone(rawValue)
-      : rawValue.trim().toUpperCase();
+      : identifierType === IdentifierType.EMAIL
+      ? normalizeEmail(rawValue) ?? stripAccents(rawValue).toLowerCase()
+      : stripAccents(rawValue).toUpperCase();
 
   const identifierHash = hashIdentifier(normalized);
   const identifierMasked = maskIdentifier(identifierType, normalized);
@@ -128,7 +135,9 @@ export async function findPatientByIdentifier(
   const normalized =
     identifierType === IdentifierType.PHONE
       ? normalizePhone(rawValue)
-      : rawValue.trim().toUpperCase();
+      : identifierType === IdentifierType.EMAIL
+      ? normalizeEmail(rawValue) ?? stripAccents(rawValue).toLowerCase()
+      : stripAccents(rawValue).toUpperCase();
 
   const identifierHash = hashIdentifier(normalized);
 
@@ -154,7 +163,9 @@ export async function findPatientByIdentifier(
     return prisma.patient.findUnique({ where: { curp: normalized } });
   }
   if (identifierType === IdentifierType.EMAIL) {
-    return prisma.patient.findUnique({ where: { email: rawValue.trim().toLowerCase() } });
+    return prisma.patient.findFirst({
+      where: { email: { equals: normalized, mode: "insensitive" } },
+    });
   }
   return null;
 }
@@ -513,8 +524,13 @@ export async function reconcilePatientOmnichannelHistory(
  */
 export async function resolveOrCreatePatient(input: RegisterPatientInput): Promise<Patient> {
   const normalizedPhone = input.phone ? normalizePhone(input.phone) : undefined;
-  const normalizedCurp = input.curp ? input.curp.trim().toUpperCase() : undefined;
-  const normalizedEmail = input.email ? input.email.trim().toLowerCase() : undefined;
+  const normalizedCurp = normalizeCurp(input.curp);
+  const normalizedEmail = normalizeEmail(input.email);
+  const normalizedFirstName = normalizePersonName(input.firstName);
+  const normalizedPaternal = normalizePersonName(input.paternalLastName);
+  const normalizedMaternal = normalizePersonName(input.maternalLastName);
+  const normalizedBirthState = normalizePlaceName(input.birthState);
+  const normalizedCountry = normalizePlaceName(input.country);
 
   const allCandidates = await findAllCandidatePatients({
     curp: normalizedCurp,
@@ -529,7 +545,7 @@ export async function resolveOrCreatePatient(input: RegisterPatientInput): Promi
     if (
       normalizedCurp &&
       c.curp &&
-      c.curp.trim().toUpperCase() !== normalizedCurp
+      normalizeCurp(c.curp) !== normalizedCurp
     ) {
       return false;
     }
@@ -557,13 +573,13 @@ export async function resolveOrCreatePatient(input: RegisterPatientInput): Promi
   }
 
   const profileData = {
-    ...(input.firstName ? { firstName: input.firstName.trim() } : {}),
-    ...(input.paternalLastName ? { paternalLastName: input.paternalLastName.trim() } : {}),
-    ...(input.maternalLastName ? { maternalLastName: input.maternalLastName.trim() } : {}),
+    ...(normalizedFirstName ? { firstName: normalizedFirstName } : {}),
+    ...(normalizedPaternal ? { paternalLastName: normalizedPaternal } : {}),
+    ...(normalizedMaternal ? { maternalLastName: normalizedMaternal } : {}),
     ...(input.birthDate ? { birthDate: new Date(input.birthDate) } : {}),
     ...(input.gender ? { gender: input.gender } : {}),
-    ...(input.birthState ? { birthState: input.birthState.trim() } : {}),
-    ...(input.country ? { country: input.country.trim() } : {}),
+    ...(normalizedBirthState ? { birthState: normalizedBirthState } : {}),
+    ...(normalizedCountry ? { country: normalizedCountry } : {}),
     ...(normalizedCurp ? { curp: normalizedCurp } : {}),
     ...(normalizedPhone ? { phone: normalizedPhone } : {}),
   };
@@ -623,7 +639,7 @@ export async function resolveOrCreateBeneficiary(params: {
     phone?: string;
   };
 }): Promise<{ beneficiary: Patient; relationshipLabel: string }> {
-  const cleanCurp = params.beneficiary.curp.trim().toUpperCase();
+  const cleanCurp = normalizeCurp(params.beneficiary.curp) ?? params.beneficiary.curp.trim().toUpperCase();
   const contactPhone = params.beneficiary.phone
     ? normalizePhone(params.beneficiary.phone)
     : params.holder.phone ?? undefined;
@@ -631,15 +647,19 @@ export async function resolveOrCreateBeneficiary(params: {
   let beneficiary = await findPatientByIdentifier(IdentifierType.CURP, cleanCurp);
 
   const profileData = {
-    firstName: params.beneficiary.firstName.trim(),
-    paternalLastName: params.beneficiary.paternalLastName.trim(),
+    firstName: normalizePersonName(params.beneficiary.firstName) ?? params.beneficiary.firstName.trim().toUpperCase(),
+    paternalLastName:
+      normalizePersonName(params.beneficiary.paternalLastName) ??
+      params.beneficiary.paternalLastName.trim().toUpperCase(),
     ...(params.beneficiary.maternalLastName
-      ? { maternalLastName: params.beneficiary.maternalLastName.trim() }
+      ? { maternalLastName: normalizePersonName(params.beneficiary.maternalLastName) }
       : {}),
     ...(params.beneficiary.birthDate ? { birthDate: new Date(params.beneficiary.birthDate) } : {}),
     ...(params.beneficiary.gender ? { gender: params.beneficiary.gender } : {}),
-    ...(params.beneficiary.birthState ? { birthState: params.beneficiary.birthState.trim() } : {}),
-    country: params.beneficiary.country?.trim() || "MÉXICO",
+    ...(params.beneficiary.birthState
+      ? { birthState: normalizePlaceName(params.beneficiary.birthState) }
+      : {}),
+    country: normalizePlaceName(params.beneficiary.country) ?? "MEXICO",
     curp: cleanCurp,
     ...(contactPhone ? { phone: contactPhone } : {}),
   };

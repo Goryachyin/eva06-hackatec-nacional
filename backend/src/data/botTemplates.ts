@@ -8,14 +8,16 @@ export const BOT_TEMPLATES = {
   welcomeMenu: () =>
     [
       "👋 ¡Hola! Bienvenido a *Salud Digna*.",
-      "Soy tu asistente automático de citas. ¿En qué te puedo ayudar hoy?",
+      "Soy tu asistente omnicanal de citas. Elige una opción rápida respondiendo con el número:",
       "",
-      "1️⃣ *Ver estudios y precios*",
-      "2️⃣ *Ver clínicas y horarios*",
-      "3️⃣ *Consultar o retomar mis citas*",
-      "4️⃣ *Hablar con un asesor de Call Center*",
+      "1️⃣ *Agendar o cotizar una nueva cita*",
+      "2️⃣ *Ver mis citas y folios activos*",
+      "3️⃣ *Editar o reagendar una cita confirmada*",
+      "4️⃣ *Ver estudios, precios y clínicas*",
+      "5️⃣ *Pausar o cambiar de trámite*",
+      "6️⃣ *Hablar con un asesor de Call Center*",
       "",
-      "💡 También puedes escribir directo el estudio que buscas (ej. *Ultrasonido*, *Biometría*, *Química*, *Mastografía* o *Electrocardiograma*).",
+      "💡 También puedes escribir directo lo que necesitas (ej. *Química sanguínea*, *Cambiar hora de mi cita* o *MENÚ*).",
     ].join("\n"),
 
   studiesCatalog: () => {
