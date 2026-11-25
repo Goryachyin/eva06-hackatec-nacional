@@ -1,13 +1,43 @@
 import crypto from "crypto";
 import { FastifyInstance } from "fastify";
-import { ActorRole, CaseState, Channel, EventType, StaffRole } from "@prisma/client";
+import {
+  ActorRole,
+  CaseState,
+  Channel,
+  EventType,
+  IdentifierType,
+  Patient,
+  StaffRole,
+} from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { normalizeCurp, normalizePersonName, normalizePhone } from "../lib/crypto";
 import { requireStaffRole } from "../middleware/rbac";
 import { findClinicById, findStudyByCode } from "../data/catalog";
 import { processCallAudioAndSummarize } from "../core/callSummaryService";
+import { recordAndPublishEvent } from "../core/eventBus";
+import { findPatientByIdentifier, resolveOrCreatePatient } from "../core/identityService";
 import { CaseContextJson, transitionServiceCase } from "../core/stateMachine";
 import { publishSignedGatewayOutbound } from "../queues/whatsappQueue";
+
+const createCallCenterCaseSchema = z
+  .object({
+    patientId: z.string().uuid().optional(),
+    nombres: z.string().min(2).optional(),
+    apellidoPaterno: z.string().min(2).optional(),
+    apellidoMaterno: z.string().optional(),
+    telefono: z.string().min(10).optional(),
+    curp: z.string().length(18).optional(),
+    studyCode: z.string().min(2),
+    clinicId: z.string().min(2),
+    preferredDate: z.string().min(8).optional(),
+    preferredTime: z.string().min(4).optional(),
+    paymentMethod: z.enum(["online", "oxxo", "clinic"]).default("online"),
+    advisorNotes: z.string().optional(),
+  })
+  .refine((d) => Boolean(d.patientId || d.telefono || d.curp || (d.nombres && d.apellidoPaterno)), {
+    message: "Selecciona un usuario existente o captura los datos básicos del paciente para crear la cita.",
+  });
 
 const assignSchema = z.object({
   expectedVersion: z.number().int().positive(),
@@ -97,6 +127,135 @@ export async function callCenterRoutes(app: FastifyInstance) {
       }));
 
       return { count: normalizedCases.length, cases: normalizedCases };
+    }
+  );
+
+  /**
+   * Crea una nueva cita desde Call Center para un usuario existente (sin alterar su cuenta)
+   * o para un paciente nuevo que llama por teléfono.
+   */
+  app.post(
+    "/api/call-center/cases",
+    {
+      preHandler: advisorGuard,
+      schema: {
+        tags: ["Canal 3: Call Center (Rol Asesor)"],
+        summary: "Crea una nueva cita desde Call Center sin modificar cuentas existentes",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request, reply) => {
+      const body = createCallCenterCaseSchema.parse(request.body);
+      const advisor = request.staffUser!;
+
+      const study = findStudyByCode(body.studyCode);
+      if (!study) {
+        return reply.status(400).send({ error: "INVALID_STUDY", message: "Estudio no encontrado en catálogo." });
+      }
+      const clinic = findClinicById(body.clinicId);
+      if (!clinic) {
+        return reply.status(400).send({ error: "INVALID_CLINIC", message: "Clínica no encontrada en catálogo." });
+      }
+
+      // 1. Asociar usuario existente SIN modificar su cuenta; solo crear expediente si no existe
+      let patient: Patient | null = null;
+      if (body.patientId) {
+        patient = await prisma.patient.findUnique({ where: { id: body.patientId } });
+        if (!patient) {
+          return reply.status(404).send({ error: "PATIENT_NOT_FOUND", message: "Usuario no encontrado." });
+        }
+      }
+      if (!patient && body.curp) {
+        const cleanCurp = normalizeCurp(body.curp);
+        if (cleanCurp) {
+          patient = await findPatientByIdentifier(IdentifierType.CURP, cleanCurp);
+        }
+      }
+      if (!patient && body.telefono) {
+        patient = await findPatientByIdentifier(IdentifierType.PHONE, normalizePhone(body.telefono));
+      }
+      if (!patient) {
+        patient = await resolveOrCreatePatient({
+          firstName: normalizePersonName(body.nombres),
+          paternalLastName: normalizePersonName(body.apellidoPaterno),
+          maternalLastName: normalizePersonName(body.apellidoMaterno),
+          phone: body.telefono ? normalizePhone(body.telefono) : undefined,
+          curp: normalizeCurp(body.curp),
+        });
+      }
+
+      const correlationId = crypto.randomUUID();
+      const created = await prisma.serviceCase.create({
+        data: {
+          patientId: patient.id,
+          requesterPatientId: patient.id,
+          relationshipLabel: "Titular",
+          thirdPartyConsent: false,
+          currentState: CaseState.INICIADO,
+          currentChannel: Channel.CALL_CENTER,
+          assignedAdvisorId: advisor.sub,
+          contextJson: { otp_verified_channels: ["CALL_CENTER"] },
+        },
+      });
+
+      await recordAndPublishEvent({
+        caseId: created.id,
+        patientId: patient.id,
+        journeyId: created.journeyId,
+        correlationId,
+        channel: Channel.CALL_CENTER,
+        actorRole: ActorRole.ADVISOR,
+        eventType: EventType.SESSION_STARTED,
+        prevState: null,
+        nextState: CaseState.INICIADO,
+        payload: {
+          via: "call_center_create_case",
+          advisorId: advisor.sub,
+          advisorName: advisor.fullName,
+        },
+      });
+
+      const slotDate = body.preferredDate || new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+      const slotTime = body.preferredTime || "09:30";
+
+      const { updatedCase } = await transitionServiceCase({
+        caseId: created.id,
+        expectedVersion: created.version,
+        nextState: CaseState.EN_ATENCION_ASESOR,
+        channel: Channel.CALL_CENTER,
+        actorRole: ActorRole.ADVISOR,
+        eventType: EventType.ADVISOR_ASSIGNED,
+        correlationId,
+        assignedAdvisorId: advisor.sub,
+        contextPatch: {
+          study: {
+            code: study.code,
+            name: study.name,
+            price: study.price,
+            prep: study.prep,
+          },
+          clinic: {
+            id: clinic.id,
+            name: clinic.name,
+            city: clinic.city,
+            address: clinic.address,
+          },
+          preferred_slot: { date: slotDate, time: slotTime },
+          payment_method: body.paymentMethod,
+        },
+        eventPayload: {
+          via: "call_center_create_case",
+          advisorId: advisor.sub,
+          advisorName: advisor.fullName,
+          studyCode: study.code,
+          clinicId: clinic.id,
+          preferredDate: slotDate,
+          preferredTime: slotTime,
+          advisorNotes: body.advisorNotes?.trim() || null,
+        },
+      });
+
+      return reply.status(201).send({ case: updatedCase, patientId: patient.id, correlationId });
     }
   );
 

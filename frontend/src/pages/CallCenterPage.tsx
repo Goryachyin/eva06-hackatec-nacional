@@ -96,6 +96,14 @@ export const CallCenterPage: React.FC = () => {
   const [clinics, setClinics] = useState<ClinicItem[]>([]);
   const [cases, setCases] = useState<CallCenterCaseItem[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const [creatingNewBooking, setCreatingNewBooking] = useState(false);
+  const [newBookingPatientMode, setNewBookingPatientMode] = useState<"existing" | "new">("existing");
+  const [newBookingPatientId, setNewBookingPatientId] = useState("");
+  const [newCallerNombres, setNewCallerNombres] = useState("");
+  const [newCallerPaterno, setNewCallerPaterno] = useState("");
+  const [newCallerMaterno, setNewCallerMaterno] = useState("");
+  const [newCallerTelefono, setNewCallerTelefono] = useState("");
+  const [newCallerCurp, setNewCallerCurp] = useState("");
   const [editingConfirmed, setEditingConfirmed] = useState(false);
 
   // Filtros por usuario y estado
@@ -140,6 +148,7 @@ export const CallCenterPage: React.FC = () => {
   const studiesCountRef = useRef(0);
   const selectedStudyCodeRef = useRef(selectedStudyCode);
   const selectedClinicIdRef = useRef(selectedClinicId);
+  const creatingNewBookingRef = useRef(creatingNewBooking);
   const selectedUserFilterRef = useRef(selectedUserFilter);
   const selectedCaseIdRef = useRef(selectedCaseId);
   const fetchSeqRef = useRef(0);
@@ -155,6 +164,9 @@ export const CallCenterPage: React.FC = () => {
   useEffect(() => {
     selectedClinicIdRef.current = selectedClinicId;
   }, [selectedClinicId]);
+  useEffect(() => {
+    creatingNewBookingRef.current = creatingNewBooking;
+  }, [creatingNewBooking]);
   useEffect(() => {
     selectedUserFilterRef.current = selectedUserFilter;
   }, [selectedUserFilter]);
@@ -186,10 +198,12 @@ export const CallCenterPage: React.FC = () => {
         }
       }
       setError(null);
-      setSelectedCaseId((prev) => {
-        if (prev && list.some((c) => c.id === prev)) return prev;
-        return list[0]?.id ?? null;
-      });
+      if (!creatingNewBookingRef.current) {
+        setSelectedCaseId((prev) => {
+          if (prev && list.some((c) => c.id === prev)) return prev;
+          return list[0]?.id ?? null;
+        });
+      }
     } catch (err) {
       if (seq !== fetchSeqRef.current) return;
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
@@ -233,6 +247,7 @@ export const CallCenterPage: React.FC = () => {
         );
         if (
           data.caseId &&
+          !creatingNewBookingRef.current &&
           (selectedUserFilterRef.current === "ALL" ||
             selectedCaseIdRef.current === data.caseId ||
             !selectedCaseIdRef.current)
@@ -304,8 +319,8 @@ export const CallCenterPage: React.FC = () => {
   }, [cases, selectedUserFilter, statusFilter, userSearchQuery]);
 
   const selectedCase = useMemo(
-    () => cases.find((c) => c.id === selectedCaseId) || null,
-    [cases, selectedCaseId]
+    () => (creatingNewBooking ? null : cases.find((c) => c.id === selectedCaseId) || null),
+    [cases, selectedCaseId, creatingNewBooking]
   );
 
   // Hidratar los 3 apartados exactamente desde donde se quedó el usuario en Web/WhatsApp
@@ -477,9 +492,95 @@ export const CallCenterPage: React.FC = () => {
     }
   };
 
-  // Paso 1: Modificar exclusivamente los datos de la cita (estudio, clínica, horario) sin alterar cuenta
+  const startNewPhoneBooking = () => {
+    setCreatingNewBooking(true);
+    setSelectedCaseId(null);
+    setEditingConfirmed(false);
+    hydratedCaseKeyRef.current = null;
+    setStep(1);
+    setSelectedCategory("Todos");
+    setStudyQuery("");
+    if (studies.length > 0) setSelectedStudyCode(studies[0].code);
+    if (clinics.length > 0) setSelectedClinicId(clinics[0].id);
+    setPreferredDate(getDefaultTomorrowIso());
+    setPreferredTime("09:30");
+    setPaymentMethod("online");
+    setAdvisorNotes("");
+    setNewBookingPatientMode(uniqueUsers.length > 0 ? "existing" : "new");
+    setNewBookingPatientId(uniqueUsers[0]?.patientId || "");
+    setNewCallerNombres("");
+    setNewCallerPaterno("");
+    setNewCallerMaterno("");
+    setNewCallerTelefono("");
+    setNewCallerCurp("");
+    setNotice(null);
+    setError(null);
+  };
+
+  // Crear nueva cita desde Call Center (asocia a usuario existente sin alterar su cuenta, o crea paciente telefónico nuevo)
+  const handleCreateNewBooking = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !selectedStudy || !selectedClinic) return;
+
+    if (newBookingPatientMode === "existing" && !newBookingPatientId) {
+      setError("Selecciona un usuario existente para asociar la nueva cita.");
+      return;
+    }
+    if (
+      newBookingPatientMode === "new" &&
+      (newCallerNombres.trim().length < 2 ||
+        newCallerPaterno.trim().length < 2 ||
+        newCallerTelefono.replace(/\D/g, "").length < 10)
+    ) {
+      setError("Captura nombre(s), apellido paterno y teléfono de 10 dígitos para el nuevo paciente.");
+      return;
+    }
+
+    setActionLoading(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const cleanCurp = newCallerCurp.trim().toUpperCase();
+      const created = await api.createCallCenterCase(token, {
+        ...(newBookingPatientMode === "existing"
+          ? { patientId: newBookingPatientId }
+          : {
+              nombres: newCallerNombres.trim(),
+              apellidoPaterno: newCallerPaterno.trim(),
+              ...(newCallerMaterno.trim() ? { apellidoMaterno: newCallerMaterno.trim() } : {}),
+              telefono: newCallerTelefono.trim(),
+              ...(cleanCurp.length === 18 ? { curp: cleanCurp } : {}),
+            }),
+        studyCode: selectedStudy.code,
+        clinicId: selectedClinic.id,
+        preferredDate,
+        preferredTime,
+        paymentMethod,
+        advisorNotes: advisorNotes.trim() || undefined,
+      });
+
+      setCreatingNewBooking(false);
+      setSelectedCaseId(created.case.id);
+      hydratedCaseKeyRef.current = null;
+      await fetchCatalogAndQueue();
+      setStep(3);
+      setNotice("Nueva cita creada y asignada. Revisa la forma de pago para confirmarla.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo crear la nueva cita.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Paso 1: Si crea nueva cita avanza a Paso 2; si edita existente modifica exclusivamente la cita
   const handleStep1Continue = async (pauseAfter = false) => {
-    if (!token || !selectedCase || !selectedStudy || !selectedClinic) return;
+    if (!selectedStudy || !selectedClinic) return;
+    if (creatingNewBooking) {
+      setError(null);
+      setStep(2);
+      return;
+    }
+    if (!token || !selectedCase) return;
 
     setActionLoading(true);
     setError(null);
@@ -748,6 +849,7 @@ export const CallCenterPage: React.FC = () => {
           token={token}
           selectedCase={selectedCase}
           onSelectCaseById={(caseId) => {
+            setCreatingNewBooking(false);
             hydratedCaseKeyRef.current = null;
             setSelectedCaseId(caseId);
           }}
@@ -764,13 +866,22 @@ export const CallCenterPage: React.FC = () => {
               <h2 className="text-base font-bold text-[#1F2933]">
                 Cola de citas ({filteredCases.length})
               </h2>
-              <button
-                type="button"
-                onClick={fetchCatalogAndQueue}
-                className="text-xs font-semibold text-[#52606D] hover:text-[#1F2933]"
-              >
-                {loading ? "..." : "Actualizar"}
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={fetchCatalogAndQueue}
+                  className="text-xs font-semibold text-[#52606D] hover:text-[#1F2933]"
+                >
+                  {loading ? "..." : "Actualizar"}
+                </button>
+                <button
+                  type="button"
+                  onClick={startNewPhoneBooking}
+                  className="px-2.5 py-1 border border-[#00875A] text-xs font-semibold text-[#00875A] hover:bg-[#00875A] hover:text-[#FFFFFF] transition-colors"
+                >
+                  + Crear cita
+                </button>
+              </div>
             </div>
 
             {/* Filtros por usuario y estado */}
@@ -861,7 +972,7 @@ export const CallCenterPage: React.FC = () => {
             ) : (
               <ul className="divide-y divide-[#E4E7EB] border-b border-[#E4E7EB] max-h-[680px] overflow-y-auto">
                 {filteredCases.map((c) => {
-                  const active = c.id === selectedCaseId;
+                  const active = !creatingNewBooking && c.id === selectedCaseId;
                   const fullName = getPatientDisplayName(c);
                   const stMeta = STATE_META[c.currentState];
                   return (
@@ -869,6 +980,7 @@ export const CallCenterPage: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => {
+                          setCreatingNewBooking(false);
                           hydratedCaseKeyRef.current = null;
                           setSelectedCaseId(c.id);
                         }}
@@ -906,36 +1018,63 @@ export const CallCenterPage: React.FC = () => {
 
           {/* ==================== COLUMNA DERECHA: GESTIÓN DE CITA (SOLO CITAS) ==================== */}
           <section className="lg:col-span-8 lg:border-l lg:border-[#E4E7EB] lg:pl-10 space-y-8">
-            {!selectedCase ? (
+            {!selectedCase && !creatingNewBooking ? (
               <div className="py-12 space-y-4">
                 <h2 className="text-xl font-bold text-[#1F2933]">
-                  Selecciona una cita de la cola para gestionarla
+                  Selecciona una cita de la cola o crea una nueva
                 </h2>
                 <p className="text-sm text-[#52606D] max-w-lg">
-                  Desde Call Center puedes consultar y modificar estudio, clínica, horario, forma de
-                  pago y confirmación de citas existentes en tiempo real. La modificación de cuentas
-                  de usuario está reservada al paciente o al Administrador.
+                  Desde Call Center puedes crear citas nuevas y modificar estudio, clínica, horario,
+                  forma de pago y confirmación de citas existentes en tiempo real. La modificación de
+                  cuentas de usuario está reservada al paciente o al Administrador.
                 </p>
+                <button
+                  type="button"
+                  onClick={startNewPhoneBooking}
+                  className="h-11 px-6 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] text-sm font-semibold transition-colors"
+                >
+                  Crear cita
+                </button>
               </div>
             ) : (
               <>
-                {/* Cabecera del expediente */}
+                {/* Cabecera del expediente o nueva cita */}
                 <header className="space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
-                        Screen-Pop omnicanal · Último canal:{" "}
-                        {CHANNEL_META[selectedCase.currentChannel].label}
+                        {creatingNewBooking
+                          ? "Nueva cita telefónica · Call Center"
+                          : `Screen-Pop omnicanal · Último canal: ${
+                              CHANNEL_META[selectedCase!.currentChannel].label
+                            }`}
                       </p>
                       <h2 className="text-2xl font-bold text-[#1F2933] mt-1">
-                        {getPatientDisplayName(selectedCase)}
+                        {creatingNewBooking
+                          ? "Crear nueva cita"
+                          : getPatientDisplayName(selectedCase!)}
                       </h2>
-                      <p className="text-xs font-mono text-[#52606D] mt-1">
-                        {selectedCase.patient.phone ? `Tel: ${selectedCase.patient.phone} · ` : ""}
-                        {selectedCase.patient.curp ? `CURP: ${selectedCase.patient.curp} · ` : ""}
-                        v{selectedCase.version}
-                      </p>
+                      {selectedCase && (
+                        <p className="text-xs font-mono text-[#52606D] mt-1">
+                          {selectedCase.patient.phone ? `Tel: ${selectedCase.patient.phone} · ` : ""}
+                          {selectedCase.patient.curp ? `CURP: ${selectedCase.patient.curp} · ` : ""}
+                          v{selectedCase.version}
+                        </p>
+                      )}
                     </div>
+
+                    {creatingNewBooking && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCreatingNewBooking(false);
+                          setSelectedCaseId(cases[0]?.id ?? null);
+                        }}
+                        className="px-3.5 py-1.5 border border-[#E4E7EB] text-xs font-semibold text-[#1F2933] hover:border-[#1F2933] shrink-0"
+                      >
+                        Cancelar
+                      </button>
+                    )}
 
                     {selectedCase && (
                       <div className="flex flex-wrap items-center gap-3 shrink-0">
@@ -1217,8 +1356,201 @@ export const CallCenterPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* ==================== PASO 2: DATOS DEL PACIENTE (SOLO LECTURA) ==================== */}
-                {step === 2 && !isConfirmed && (
+                {/* ==================== PASO 2: CREAR CITA (ASOCIAR PACIENTE) O VER PERFIL (SOLO LECTURA) ==================== */}
+                {step === 2 && !isConfirmed && creatingNewBooking && (
+                  <form onSubmit={handleCreateNewBooking} className="space-y-6">
+                    <div className="flex items-center justify-between gap-4">
+                      <button
+                        type="button"
+                        onClick={() => setStep(1)}
+                        className="text-xs font-semibold text-[#00875A] hover:underline"
+                      >
+                        ← Cambiar estudio, clínica o horario ({selectedStudy?.name})
+                      </button>
+                    </div>
+
+                    <section className="space-y-3 pb-5 border-b border-[#E4E7EB]">
+                      <h3 className="text-base font-bold text-[#1F2933]">
+                        ¿A qué paciente corresponde esta nueva cita?
+                      </h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 border border-[#E4E7EB]">
+                        <button
+                          type="button"
+                          onClick={() => setNewBookingPatientMode("existing")}
+                          className={`p-3.5 text-left border-b sm:border-b-0 sm:border-r border-[#E4E7EB] transition-colors ${
+                            newBookingPatientMode === "existing"
+                              ? "bg-[#00875A] text-[#FFFFFF]"
+                              : "bg-[#FFFFFF] text-[#1F2933] hover:bg-[#F7F8F9]"
+                          }`}
+                        >
+                          <strong className="block text-sm font-semibold">Usuario existente</strong>
+                          <small
+                            className={`block text-xs mt-0.5 ${
+                              newBookingPatientMode === "existing"
+                                ? "text-[#FFFFFF]"
+                                : "text-[#52606D]"
+                            }`}
+                          >
+                            Asocia la cita sin modificar su cuenta
+                          </small>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNewBookingPatientMode("new")}
+                          className={`p-3.5 text-left transition-colors ${
+                            newBookingPatientMode === "new"
+                              ? "bg-[#00875A] text-[#FFFFFF]"
+                              : "bg-[#FFFFFF] text-[#1F2933] hover:bg-[#F7F8F9]"
+                          }`}
+                        >
+                          <strong className="block text-sm font-semibold">
+                            Paciente nuevo por llamada
+                          </strong>
+                          <small
+                            className={`block text-xs mt-0.5 ${
+                              newBookingPatientMode === "new" ? "text-[#FFFFFF]" : "text-[#52606D]"
+                            }`}
+                          >
+                            Datos básicos para abrir la cita
+                          </small>
+                        </button>
+                      </div>
+                    </section>
+
+                    {newBookingPatientMode === "existing" ? (
+                      <div className="space-y-3">
+                        <label
+                          htmlFor="cc-new-existing-user"
+                          className="block text-xs font-semibold text-[#1F2933]"
+                        >
+                          Selecciona el usuario *
+                        </label>
+                        <select
+                          id="cc-new-existing-user"
+                          required
+                          value={newBookingPatientId}
+                          onChange={(e) => setNewBookingPatientId(e.target.value)}
+                          className="w-full h-11 border border-[#E4E7EB] bg-[#FFFFFF] px-3 text-sm text-[#1F2933] focus:border-[#00875A]"
+                        >
+                          <option value="">Selecciona un usuario...</option>
+                          {uniqueUsers.map((u) => (
+                            <option key={u.patientId} value={u.patientId}>
+                              {u.label} · {u.secondary}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label
+                              htmlFor="cc-new-nombres"
+                              className="block text-xs font-semibold text-[#1F2933] mb-1.5"
+                            >
+                              Nombre(s) *
+                            </label>
+                            <input
+                              id="cc-new-nombres"
+                              type="text"
+                              required
+                              value={newCallerNombres}
+                              onChange={(e) => setNewCallerNombres(e.target.value)}
+                              placeholder="Nombre(s)"
+                              className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm text-[#1F2933] focus:border-[#00875A]"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor="cc-new-paterno"
+                              className="block text-xs font-semibold text-[#1F2933] mb-1.5"
+                            >
+                              Apellido paterno *
+                            </label>
+                            <input
+                              id="cc-new-paterno"
+                              type="text"
+                              required
+                              value={newCallerPaterno}
+                              onChange={(e) => setNewCallerPaterno(e.target.value)}
+                              placeholder="Apellido paterno"
+                              className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm text-[#1F2933] focus:border-[#00875A]"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                          <div>
+                            <label
+                              htmlFor="cc-new-materno"
+                              className="block text-xs font-semibold text-[#1F2933] mb-1.5"
+                            >
+                              Apellido materno
+                            </label>
+                            <input
+                              id="cc-new-materno"
+                              type="text"
+                              value={newCallerMaterno}
+                              onChange={(e) => setNewCallerMaterno(e.target.value)}
+                              placeholder="Opcional"
+                              className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm text-[#1F2933] focus:border-[#00875A]"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor="cc-new-tel"
+                              className="block text-xs font-semibold text-[#1F2933] mb-1.5"
+                            >
+                              Teléfono *
+                            </label>
+                            <input
+                              id="cc-new-tel"
+                              type="tel"
+                              required
+                              value={newCallerTelefono}
+                              onChange={(e) => setNewCallerTelefono(e.target.value)}
+                              placeholder="10 dígitos o +52..."
+                              className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm text-[#1F2933] focus:border-[#00875A]"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor="cc-new-curp"
+                              className="block text-xs font-semibold text-[#1F2933] mb-1.5"
+                            >
+                              CURP (opcional)
+                            </label>
+                            <input
+                              id="cc-new-curp"
+                              type="text"
+                              maxLength={18}
+                              value={newCallerCurp}
+                              onChange={(e) => setNewCallerCurp(e.target.value.toUpperCase())}
+                              placeholder="18 caracteres"
+                              className="w-full h-11 border border-[#E4E7EB] px-3.5 text-sm font-mono text-[#1F2933] focus:border-[#00875A]"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="pt-4 border-t border-[#E4E7EB] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <p className="text-xs text-[#52606D]">
+                        {selectedStudy?.name} · {selectedClinic?.name} · {preferredDate}{" "}
+                        {preferredTime} hrs
+                      </p>
+                      <button
+                        type="submit"
+                        disabled={actionLoading}
+                        className="h-12 px-7 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] text-sm font-semibold transition-colors disabled:opacity-50"
+                      >
+                        {actionLoading ? "Creando cita..." : "Crear cita y continuar al pago"}
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {step === 2 && !isConfirmed && !creatingNewBooking && selectedCase && (
                   <div className="space-y-6">
                     <div className="flex items-center justify-between gap-4">
                       <button

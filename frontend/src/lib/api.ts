@@ -311,6 +311,32 @@ export const api = {
       token,
     }),
 
+  createCallCenterCase: (
+    token: string,
+    payload: {
+      patientId?: string;
+      nombres?: string;
+      apellidoPaterno?: string;
+      apellidoMaterno?: string;
+      telefono?: string;
+      curp?: string;
+      studyCode: string;
+      clinicId: string;
+      preferredDate?: string;
+      preferredTime?: string;
+      paymentMethod?: "online" | "oxxo" | "clinic";
+      advisorNotes?: string;
+    }
+  ) =>
+    request<{ case: ServiceCase; patientId: string; correlationId: string }>(
+      "/api/call-center/cases",
+      {
+        method: "POST",
+        token,
+        body: JSON.stringify(payload),
+      }
+    ),
+
   assignCallCenterCase: (token: string, caseId: string, expectedVersion: number) =>
     request<{ case: ServiceCase; correlationId: string }>(
       `/api/call-center/cases/${caseId}/assign`,
