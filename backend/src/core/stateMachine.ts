@@ -20,6 +20,31 @@ export class InvalidStateTransitionError extends Error {
   }
 }
 
+export interface CallSummaryRecord {
+  id: string;
+  callId?: string;
+  createdAt: string;
+  durationSeconds?: number;
+  advisorName: string;
+  source: "webrtc_call" | "audio_upload" | "transcript_text";
+  summary: string;
+  patientSafeSummary: string;
+  patientIntent: string;
+  agreements: string[];
+  pendingActions: string[];
+  openQuestions: string[];
+  sentiment: "positivo" | "neutral" | "preocupado" | "urgente";
+  extractedEntities: {
+    studyCode?: string;
+    clinicId?: string;
+    preferredDate?: string;
+    preferredTime?: string;
+    paymentMethod?: "online" | "oxxo" | "clinic";
+  };
+  transcriptPreview: string;
+  aiProcessed: boolean;
+}
+
 export interface CaseContextJson {
   study?: {
     code: string;
@@ -39,6 +64,8 @@ export interface CaseContextJson {
   };
   payment_method?: "online" | "oxxo" | "clinic";
   open_questions?: string[];
+  call_summaries?: CallSummaryRecord[];
+  latest_call_summary?: string;
   appointment_folio?: string | null;
   qr_payload?: string | null;
   otp_verified_channels?: string[];
@@ -156,6 +183,9 @@ export function buildDeterministicHandoffSummary(
   }
   if (ctx.open_questions && ctx.open_questions.length > 0) {
     parts.push(`Duda pendiente: "${ctx.open_questions[ctx.open_questions.length - 1]}".`);
+  }
+  if (ctx.latest_call_summary) {
+    parts.push(`Resumen última llamada Call Center: ${ctx.latest_call_summary}`);
   }
   if (ctx.study?.prep) {
     parts.push(`Preparación: ${ctx.study.prep}`);

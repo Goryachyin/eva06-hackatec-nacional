@@ -23,10 +23,12 @@ const envSchema = z.object({
     .default("sd_e2e_gateway_hmac_secret_2026_local"),
   GATEWAY_SIGNATURE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
 
-  // Plugin opcional de IA (OpenAI Function Calling) con fallback deterministico automatico
+  // Plugin opcional de IA (OpenAI Function Calling + STT/Resumen de llamadas) con fallback deterministico
   OPENAI_API_KEY: z.string().default(""),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
+  OPENAI_STT_MODEL: z.string().default("gpt-4o-mini-transcribe"),
   OPENAI_TIMEOUT_MS: z.coerce.number().int().positive().default(6500),
+  OPENAI_CALL_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QrCode } from "lucide-react";
 import { CallCenterLayout } from "../components/layouts/CallCenterLayout";
+import { AdvisorVoicePanel } from "../components/AdvisorVoicePanel";
 import {
   api,
   ApiError,
@@ -909,6 +910,21 @@ export const CallCenterPage: React.FC = () => {
         {error && (
           <p className="border-l-2 border-[#B42318] pl-4 py-1 text-sm text-[#B42318]">{error}</p>
         )}
+
+        {/* Panel de llamadas WebRTC en tiempo real + Resúmenes IA */}
+        <AdvisorVoicePanel
+          token={token}
+          selectedCase={selectedCase}
+          onSelectCaseById={(caseId) => {
+            setCreatingNewBooking(false);
+            hydratedCaseKeyRef.current = null;
+            setSelectedCaseId(caseId);
+          }}
+          onCaseUpdated={async () => {
+            hydratedCaseKeyRef.current = null;
+            await fetchCatalogAndQueue();
+          }}
+        />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
           {/* ==================== COLUMNA IZQUIERDA: FILTRO POR USUARIO Y COLA ==================== */}

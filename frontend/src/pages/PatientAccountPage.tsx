@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { QrCode } from "lucide-react";
 import { OrderJourneyTracker } from "../components/OrderJourneyTracker";
+import { PatientVoiceCallBar } from "../components/PatientVoiceCallBar";
 import {
   api,
   ApiError,
@@ -221,6 +222,13 @@ export const PatientAccountPage: React.FC = () => {
           </button>
         </div>
       )}
+
+      {/* Llamada de voz WebRTC en tiempo real con un asesor de Call Center */}
+      <PatientVoiceCallBar
+        caseId={cases.find((c) => c.currentState !== "CITA_CONFIRMADA")?.id ?? cases[0]?.id}
+        phone={profile?.telefono || undefined}
+        patientName={fullName || undefined}
+      />
 
       {/* Vinculación asistida para trámites hechos desde otro número de WhatsApp o Call Center */}
       <section className="pb-6 border-b border-[#E4E7EB] space-y-4">

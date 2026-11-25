@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { QrCode } from "lucide-react";
+import { PatientVoiceCallBar } from "../components/PatientVoiceCallBar";
 import {
   api,
   getOrCreateWebSessionId,
@@ -895,6 +896,17 @@ export const LaboratorioPage: React.FC = () => {
           {draftNotice}
         </p>
       )}
+
+      {/* Llamada WebRTC directa al asesor conservando el expediente en curso */}
+      <PatientVoiceCallBar
+        caseId={activeCase?.id}
+        phone={telefono || loggedPatient?.telefono || undefined}
+        patientName={
+          [nombres || loggedPatient?.nombres, apellidoPaterno || loggedPatient?.apellido_paterno]
+            .filter(Boolean)
+            .join(" ") || undefined
+        }
+      />
 
       {/* ==================== PASO 1: ESTUDIO, PREPARACIÓN Y CLÍNICA ==================== */}
       {step === 1 && (

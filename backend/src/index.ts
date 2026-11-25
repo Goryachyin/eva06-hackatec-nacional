@@ -16,10 +16,12 @@ import { webChannelRoutes } from "./routes/webChannel";
 import { whatsappGatewayRoutes } from "./routes/whatsappGateway";
 import { otp2faRoutes } from "./routes/otp2fa";
 import { callCenterRoutes } from "./routes/callCenter";
+import { voiceCallsRoutes } from "./routes/voiceCalls";
 import { adminRoutes } from "./routes/admin";
 
 async function buildServer() {
   const app = Fastify({
+    bodyLimit: 18 * 1024 * 1024,
     logger: {
       level: env.NODE_ENV === "production" ? "info" : "info",
     },
@@ -110,6 +112,7 @@ async function buildServer() {
   await app.register(whatsappGatewayRoutes);
   await app.register(otp2faRoutes);
   await app.register(callCenterRoutes);
+  await app.register(voiceCallsRoutes);
   await app.register(adminRoutes);
 
   return app;

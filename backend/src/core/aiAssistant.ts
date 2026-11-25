@@ -767,6 +767,17 @@ export async function runSmartWhatsAppAssistant(params: {
     `- Folio confirmado: ${ctx.appointment_folio || "Pendiente"}`,
     `- Faltantes para poder confirmar: ${missingReq.length > 0 ? missingReq.join(", ") : "Ninguno (listo para confirmar)"}`,
     `- Resumen handoff omnicanal: ${ctx.handoff_summary || "Sin resumen previo"}`,
+    ...(ctx.call_summaries && ctx.call_summaries.length > 0
+      ? [
+          `- Última llamada con Call Center (${ctx.call_summaries[0].advisorName}): ${ctx.call_summaries[0].summary}`,
+          ...(ctx.call_summaries[0].agreements.length > 0
+            ? [`- Acuerdos de la llamada: ${ctx.call_summaries[0].agreements.join("; ")}`]
+            : []),
+          ...(ctx.call_summaries[0].pendingActions.length > 0
+            ? [`- Pendientes de la llamada: ${ctx.call_summaries[0].pendingActions.join("; ")}`]
+            : []),
+        ]
+      : []),
     "",
     "ÚLTIMOS EVENTOS DEL TRÁMITE ACTIVO ENTRE CANALES:",
     recentEventsSummary || "- Sin eventos previos",
@@ -839,6 +850,9 @@ export async function runSmartWhatsAppAssistant(params: {
           paymentMethod: curCtx.payment_method ?? null,
           folio: curCtx.appointment_folio ?? null,
           handoffSummary: curCtx.handoff_summary ?? null,
+          latestCallSummary: curCtx.latest_call_summary ?? null,
+          latestCallAgreements: curCtx.call_summaries?.[0]?.agreements ?? [],
+          latestCallPendingActions: curCtx.call_summaries?.[0]?.pendingActions ?? [],
         },
         recentEvents: freshEvents.reverse().map((e) => ({
           channel: e.channel,

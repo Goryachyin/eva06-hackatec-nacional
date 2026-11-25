@@ -39,6 +39,44 @@ export interface ClinicItem {
   hours: string;
 }
 
+export interface CallSummaryRecord {
+  id: string;
+  callId?: string;
+  createdAt: string;
+  durationSeconds?: number;
+  advisorName: string;
+  source: "webrtc_call" | "audio_upload" | "transcript_text";
+  summary: string;
+  patientSafeSummary: string;
+  patientIntent: string;
+  agreements: string[];
+  pendingActions: string[];
+  openQuestions: string[];
+  sentiment: "positivo" | "neutral" | "preocupado" | "urgente";
+  extractedEntities: {
+    studyCode?: string;
+    clinicId?: string;
+    preferredDate?: string;
+    preferredTime?: string;
+    paymentMethod?: "online" | "oxxo" | "clinic";
+  };
+  transcriptPreview: string;
+  aiProcessed: boolean;
+}
+
+export interface IncomingVoiceCall {
+  callId: string;
+  caseId: string;
+  patientId: string;
+  patientName: string;
+  patientPhone?: string | null;
+  studyName?: string | null;
+  clinicName?: string | null;
+  status: "ringing" | "active" | "ended" | "rejected";
+  offerSdp: RTCSessionDescriptionInit;
+  createdAt: string;
+}
+
 export interface CaseContextJson {
   study?: {
     code: string;
@@ -56,7 +94,10 @@ export interface CaseContextJson {
     date: string;
     time: string;
   };
+  payment_method?: "online" | "oxxo" | "clinic";
   open_questions?: string[];
+  call_summaries?: CallSummaryRecord[];
+  latest_call_summary?: string;
   appointment_folio?: string | null;
   qr_payload?: string | null;
   otp_verified_channels?: string[];

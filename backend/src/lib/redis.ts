@@ -3,6 +3,7 @@ import { env } from "../config/env";
 
 export const JOURNEY_PUBSUB_CHANNEL = "journey:events";
 export const WHATSAPP_OUTBOUND_PUBSUB_CHANNEL = "whatsapp:outbound";
+export const WEBRTC_SIGNALING_PUBSUB_CHANNEL = "webrtc:signaling";
 
 /**
  * Cliente Redis principal para operaciones atomicas (SETNX, OTP TTL, Publish).

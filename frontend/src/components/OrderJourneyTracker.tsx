@@ -187,6 +187,15 @@ export const OrderJourneyTracker: React.FC<OrderJourneyTrackerProps> = ({
                       </p>
                     )}
 
+                    {ev.payloadJson &&
+                      typeof ev.payloadJson.patientSafeSummary === "string" &&
+                      ev.payloadJson.patientSafeSummary && (
+                        <p className="mt-2 border-l-2 border-[#00875A] pl-3 text-xs text-[#1F2933] leading-relaxed">
+                          <strong className="text-[#00875A]">Resumen de llamada:</strong>{" "}
+                          {ev.payloadJson.patientSafeSummary}
+                        </p>
+                      )}
+
                     {showAuditDetails && (
                       <p className="mt-1 text-[11px] font-mono text-[#52606D]">
                         actor: {ev.actorRole} · correlation_id: {ev.correlationId}

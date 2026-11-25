@@ -2,6 +2,7 @@ import {
   AdminOverviewResponse,
   AdminUserLookupResponse,
   CallCenterCaseItem,
+  CallSummaryRecord,
   ClinicItem,
   HealthResponse,
   JourneyEventItem,
@@ -339,6 +340,81 @@ export const api = {
       method: "POST",
       token,
       body: JSON.stringify(payload),
+    }),
+
+  processCallSummary: (
+    token: string,
+    caseId: string,
+    payload: {
+      callId?: string;
+      source: "webrtc_call" | "audio_upload" | "transcript_text";
+      audioBase64?: string;
+      mimeType?: string;
+      transcriptText?: string;
+      durationSeconds?: number;
+      applyExtractedEntities?: boolean;
+    }
+  ) =>
+    request<{
+      case: ServiceCase;
+      callSummary: CallSummaryRecord;
+      correlationId: string;
+    }>(`/api/call-center/cases/${caseId}/calls/process`, {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+
+  applyCallSummaryEntities: (token: string, caseId: string, summaryId: string) =>
+    request<{ case: ServiceCase; correlationId: string }>(
+      `/api/call-center/cases/${caseId}/calls/${summaryId}/apply`,
+      {
+        method: "POST",
+        token,
+      }
+    ),
+
+  // Señalización WebRTC en tiempo real (Paciente <-> Asesor Call Center)
+  startVoiceCall: (
+    payload: {
+      offerSdp: RTCSessionDescriptionInit;
+      caseId?: string;
+      webSessionId?: string;
+      phone?: string;
+      patientName?: string;
+    },
+    patientToken?: string | null
+  ) =>
+    request<{ callId: string; caseId: string; status: string }>("/api/voice/calls", {
+      method: "POST",
+      token: patientToken,
+      body: JSON.stringify(payload),
+    }),
+
+  answerVoiceCall: (token: string, callId: string, answerSdp: RTCSessionDescriptionInit) =>
+    request<{ ok: boolean; callId: string; caseId: string; status: string }>(
+      `/api/voice/calls/${callId}/answer`,
+      {
+        method: "POST",
+        token,
+        body: JSON.stringify({ answerSdp }),
+      }
+    ),
+
+  sendVoiceIceCandidate: (
+    callId: string,
+    role: "patient" | "advisor",
+    candidate: RTCIceCandidateInit
+  ) =>
+    request<{ ok: boolean }>(`/api/voice/calls/${callId}/ice`, {
+      method: "POST",
+      body: JSON.stringify({ role, candidate }),
+    }),
+
+  endVoiceCall: (callId: string, reason: "ended" | "rejected" = "ended") =>
+    request<{ ok: boolean; callId: string; status: string }>(`/api/voice/calls/${callId}/end`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
     }),
 
   // Cuenta de Paciente (Portal Público)
