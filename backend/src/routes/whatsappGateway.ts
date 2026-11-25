@@ -21,6 +21,8 @@ const gatewayInboundSchema = z.object({
   messageId: z.string().min(4),
   fromPhone: z.string().min(10),
   remoteJid: z.string().optional(),
+  whatsappLid: z.string().optional(),
+  isUnresolvedLid: z.boolean().optional(),
   text: z.string().min(1),
   receivedAt: z.string().optional(),
 });
@@ -111,8 +113,10 @@ export async function whatsappGatewayRoutes(app: FastifyInstance) {
       const correlationId = crypto.randomUUID();
       await whatsappInboundQueue.add("baileys-message", {
         messageId: body.messageId,
-        fromPhone: normalizePhone(body.fromPhone),
+        fromPhone: body.isUnresolvedLid ? body.fromPhone : normalizePhone(body.fromPhone),
         remoteJid: body.remoteJid,
+        whatsappLid: body.whatsappLid,
+        isUnresolvedLid: body.isUnresolvedLid,
         text: body.text,
         source: "baileys",
         correlationId,

@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyReply } from "fastify";
 import bcrypt from "bcryptjs";
-import { Gender, IdentifierType, Patient } from "@prisma/client";
+import { Channel, Gender, IdentifierType, Patient } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { JOURNEY_PUBSUB_CHANNEL, redisSubscriber } from "../lib/redis";
@@ -11,9 +11,12 @@ import {
   signPatientJwt,
 } from "../lib/crypto";
 import {
+  reconcilePatientOmnichannelHistory,
   RELATIONSHIP_LABELS,
+  requestChannelLinkChallenge,
   resolveOrCreatePatient,
   upsertIdentityLink,
+  verifyChannelLinkChallenge,
 } from "../core/identityService";
 import { requirePatientAuth } from "../middleware/rbac";
 
@@ -35,6 +38,19 @@ const patientRegisterSchema = z.object({
 const patientLoginSchema = z.object({
   identifier: z.string().min(4, "Ingresa tu correo electrónico, teléfono o CURP"),
   password: z.string().min(4),
+});
+
+const requestChannelLinkSchema = z
+  .object({
+    phone: z.string().min(10).optional(),
+    folio: z.string().min(5).optional(),
+  })
+  .refine((d) => Boolean(d.phone || d.folio), {
+    message: "Debes proporcionar un teléfono o un folio de cita.",
+  });
+
+const verifyChannelLinkSchema = z.object({
+  otpCode: z.string().regex(/^\d{6}$/, "El código OTP debe tener 6 dígitos."),
 });
 
 // Clientes SSE de pacientes autenticados (filtrado estricto por patientId/requesterPatientId)
@@ -147,6 +163,18 @@ export async function patientAuthRoutes(app: FastifyInstance) {
 
       await upsertIdentityLink(updated.id, IdentifierType.EMAIL, cleanEmail, true);
 
+      // Vinculación inteligente: absorber cualquier expediente sombra previo (WhatsApp / Call Center)
+      await reconcilePatientOmnichannelHistory(updated.id, {
+        webSessionId: body.webSessionId,
+        channel: Channel.WEB,
+      });
+
+      const priorCasesCount = await prisma.serviceCase.count({
+        where: {
+          OR: [{ patientId: updated.id }, { requesterPatientId: updated.id }],
+        },
+      });
+
       const token = signPatientJwt({
         sub: updated.id,
         email: cleanEmail,
@@ -155,6 +183,7 @@ export async function patientAuthRoutes(app: FastifyInstance) {
       return reply.status(201).send({
         token,
         patient: formatPublicPatient(updated),
+        syncedCasesCount: priorCasesCount,
       });
     }
   );
@@ -198,14 +227,23 @@ export async function patientAuthRoutes(app: FastifyInstance) {
         });
       }
 
+      // Reconciliación inteligente al iniciar sesión para sincronizar citas hechas en WhatsApp/Call Center
+      const reconciliation = await reconcilePatientOmnichannelHistory(patient.id, {
+        channel: Channel.WEB,
+      });
+
       const token = signPatientJwt({
-        sub: patient.id,
-        email: patient.email ?? patient.phone ?? patient.id,
+        sub: reconciliation.patient.id,
+        email:
+          reconciliation.patient.email ??
+          reconciliation.patient.phone ??
+          reconciliation.patient.id,
       });
 
       return {
         token,
-        patient: formatPublicPatient(patient),
+        patient: formatPublicPatient(reconciliation.patient),
+        syncedCasesCount: reconciliation.syncedCasesCount,
       };
     }
   );
@@ -226,6 +264,11 @@ export async function patientAuthRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const patientId = request.patientUser!.sub;
+
+      // Reconciliación automática antes de consultar el historial (absorbe citas sombra de WhatsApp/Call Center)
+      const reconciled = await reconcilePatientOmnichannelHistory(patientId, {
+        channel: Channel.WEB,
+      }).catch(() => ({ syncedCasesCount: 0 }));
 
       const patient = await prisma.patient.findUnique({
         where: { id: patientId },
@@ -319,7 +362,63 @@ export async function patientAuthRoutes(app: FastifyInstance) {
         patient: formatPublicPatient(patient),
         beneficiaries,
         cases: formattedCases,
+        syncedCasesCount: reconciled.syncedCasesCount,
       };
+    }
+  );
+
+  /**
+   * Solicitar vinculación manual de citas previas (otro número de WhatsApp/teléfono o folio) con reto OTP
+   */
+  app.post(
+    "/api/patients/me/link-channel/request",
+    {
+      preHandler: requirePatientAuth,
+      schema: {
+        tags: ["Cuenta de Paciente (Portal Público)"],
+        summary: "Solicita vinculación de citas previas de WhatsApp/Call Center por teléfono o folio (emite OTP)",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request, reply) => {
+      const patientId = request.patientUser!.sub;
+      const body = requestChannelLinkSchema.parse(request.body);
+      const res = await requestChannelLinkChallenge({
+        masterPatientId: patientId,
+        phone: body.phone,
+        folio: body.folio,
+      });
+      if (!res.ok) {
+        return reply.status(404).send({ error: "NO_CASES_TO_LINK", message: res.message });
+      }
+      return res;
+    }
+  );
+
+  /**
+   * Confirmar vinculación manual con código OTP de 6 dígitos
+   */
+  app.post(
+    "/api/patients/me/link-channel/verify",
+    {
+      preHandler: requirePatientAuth,
+      schema: {
+        tags: ["Cuenta de Paciente (Portal Público)"],
+        summary: "Verifica el código OTP y fusiona las citas previas al perfil autenticado",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request, reply) => {
+      const patientId = request.patientUser!.sub;
+      const body = verifyChannelLinkSchema.parse(request.body);
+      const res = await verifyChannelLinkChallenge({
+        masterPatientId: patientId,
+        otpCode: body.otpCode,
+      });
+      if (!res.ok) {
+        return reply.status(400).send({ error: "OTP_LINK_FAILED", message: res.message });
+      }
+      return res;
     }
   );
 

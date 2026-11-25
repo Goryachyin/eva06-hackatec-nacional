@@ -13,6 +13,7 @@ import { CLINICS_CATALOG, STUDIES_CATALOG } from "../data/catalog";
 import { BOT_TEMPLATES } from "../data/botTemplates";
 import {
   findPatientByIdentifier,
+  formatLidIdentifier,
   issueOtpChallenge,
   resolveOrCreatePatient,
   verifyOtpChallenge,
@@ -24,8 +25,10 @@ import { runSmartWhatsAppAssistant } from "../core/aiAssistant";
 export interface WhatsAppInboundJob {
   messageId: string;
   fromPhone: string;
-  /** JID de Baileys (ej. 5217443116876@s.whatsapp.net) para responder al chat exacto */
+  /** JID de Baileys (ej. 5217443116876@s.whatsapp.net o ...@lid) para responder al chat exacto */
   remoteJid?: string;
+  whatsappLid?: string;
+  isUnresolvedLid?: boolean;
   text: string;
   source: "baileys" | "simulator";
   correlationId: string;
@@ -184,7 +187,8 @@ const STATE_SHORT: Record<CaseState, string> = {
  *  - N-saltos bidireccionales Web <-> WhatsApp <-> Call Center
  */
 export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promise<{ reply: string }> {
-  const phone = normalizePhone(jobData.fromPhone);
+  const isUnresolvedLid = Boolean(jobData.isUnresolvedLid);
+  const phone = isUnresolvedLid ? jobData.fromPhone : normalizePhone(jobData.fromPhone);
   const text = jobData.text.trim();
   const correlationId = jobData.correlationId;
 
@@ -196,10 +200,23 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
     correlationId,
   });
 
-  // 1. Resolver o crear al Titular propietario del numero telefonico
-  let holder = await findPatientByIdentifier(IdentifierType.PHONE, phone);
+  // 1. Resolver o vincular inteligentemente al Titular propietario (soporta telefono real y @lid)
+  let holder = isUnresolvedLid
+    ? await findPatientByIdentifier(
+        IdentifierType.APP,
+        formatLidIdentifier(jobData.whatsappLid || jobData.fromPhone)
+      )
+    : null;
+
   if (!holder) {
-    holder = await resolveOrCreatePatient({ phone });
+    holder = isUnresolvedLid
+      ? await resolveOrCreatePatient({
+          whatsappLid: jobData.whatsappLid || jobData.fromPhone,
+        })
+      : await resolveOrCreatePatient({
+          phone,
+          ...(jobData.whatsappLid ? { whatsappLid: jobData.whatsappLid } : {}),
+        });
   }
 
   // 2. Obtener TODOS los tramites abiertos gestionados por este titular o donde es beneficiario
@@ -354,15 +371,22 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
       const history = await getSimulatedChatHistory(phone);
       const aiRes = await runSmartWhatsAppAssistant({
         serviceCase: activeCase,
+        holder,
         patientFirstName: holder.firstName,
         isThirdParty: false,
         relationshipLabel: "Titular",
         history,
         userText: text,
         correlationId,
+        whatsappLid: jobData.whatsappLid,
+        isUnresolvedLid,
       });
       if (aiRes) {
-        if (aiRes.confirmed) await redis.del(SELECTED_CASE_KEY(phone));
+        if (aiRes.confirmed) {
+          await redis.del(SELECTED_CASE_KEY(phone));
+        } else if (aiRes.switchedCaseId) {
+          await redis.set(SELECTED_CASE_KEY(phone), aiRes.switchedCaseId, "EX", 1800);
+        }
         await replyToPatient(jobData, aiRes.reply);
         return { reply: aiRes.reply };
       }
@@ -531,15 +555,22 @@ export async function processWhatsAppInbound(jobData: WhatsAppInboundJob): Promi
     const history = await getSimulatedChatHistory(phone);
     const aiRes = await runSmartWhatsAppAssistant({
       serviceCase: activeCase,
+      holder,
       patientFirstName: activeCase.patient.firstName,
       isThirdParty,
       relationshipLabel: activeCase.relationshipLabel || (isThirdParty ? "Familiar" : "Titular"),
       history,
       userText: text,
       correlationId,
+      whatsappLid: jobData.whatsappLid,
+      isUnresolvedLid,
     });
     if (aiRes) {
-      if (aiRes.confirmed) await redis.del(SELECTED_CASE_KEY(phone));
+      if (aiRes.confirmed) {
+        await redis.del(SELECTED_CASE_KEY(phone));
+      } else if (aiRes.switchedCaseId) {
+        await redis.set(SELECTED_CASE_KEY(phone), aiRes.switchedCaseId, "EX", 1800);
+      }
       await replyToPatient(jobData, aiRes.reply);
       return { reply: aiRes.reply };
     }

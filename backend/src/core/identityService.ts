@@ -42,16 +42,28 @@ export interface RegisterPatientInput {
   phone?: string;
   email?: string;
   webSessionId?: string;
+  whatsappLid?: string;
 }
 
 const OTP_KEY = (patientId: string) => `otp:challenge:${patientId}`;
 const OTP_OUTBOX_KEY = "demo:otp:outbox";
+const CHANNEL_LINK_OTP_KEY = (patientId: string) => `otp:channel_link:${patientId}`;
 
 export interface OtpChallengeRecord {
   otpHash: string;
   caseId: string;
   journeyId: string;
   channel: Channel;
+  attempts: number;
+  createdAt: string;
+}
+
+export interface ChannelLinkOtpRecord {
+  otpHash: string;
+  targetPatientIds: string[];
+  targetCaseIds: string[];
+  phone?: string;
+  folio?: string;
   attempts: number;
   createdAt: string;
 }
@@ -65,6 +77,11 @@ export interface OutboxOtpEntry {
   caseId: string;
   createdAt: string;
   expiresAt: string;
+}
+
+export function formatLidIdentifier(rawLid: string): string {
+  const digits = rawLid.replace(/\D/g, "");
+  return `LID:${digits || rawLid.trim().toUpperCase()}`;
 }
 
 export async function upsertIdentityLink(
@@ -130,7 +147,7 @@ export async function findPatientByIdentifier(
   if (identifierType === IdentifierType.PHONE) {
     return prisma.patient.findFirst({
       where: { phone: normalized },
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ passwordHash: "asc" }, { createdAt: "asc" }],
     });
   }
   if (identifierType === IdentifierType.CURP) {
@@ -143,25 +160,400 @@ export async function findPatientByIdentifier(
 }
 
 /**
- * Identity Stitching progresivo para el Titular de la cuenta / telefono.
+ * Determina si dos expedientes Patient son compatibles para fusionarse (mismo titular).
+ * Protege estrictamente la arquitectura Multibeneficiario (LFPDPPP):
+ * NUNCA fusiona dos pacientes que tengan CURPs distintas ni dos cuentas con contraseñas distintas.
+ */
+function canSafelyMergePatients(primary: Patient, candidate: Patient): boolean {
+  if (primary.id === candidate.id) return false;
+  if (primary.passwordHash && candidate.passwordHash) return false;
+  if (
+    primary.curp &&
+    candidate.curp &&
+    primary.curp.trim().toUpperCase() !== candidate.curp.trim().toUpperCase()
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Elige el expediente canónico maestro entre varios candidatos compatibles:
+ * Prioridad: (1) Cuenta web con passwordHash -> (2) Tiene CURP -> (3) Más antiguo.
+ */
+function pickCanonicalMaster(candidates: Patient[]): Patient {
+  return [...candidates].sort((a, b) => {
+    const aHasPass = a.passwordHash ? 1 : 0;
+    const bHasPass = b.passwordHash ? 1 : 0;
+    if (aHasPass !== bHasPass) return bHasPass - aHasPass;
+
+    const aHasCurp = a.curp ? 1 : 0;
+    const bHasCurp = b.curp ? 1 : 0;
+    if (aHasCurp !== bHasCurp) return bHasCurp - aHasCurp;
+
+    return a.createdAt.getTime() - b.createdAt.getTime();
+  })[0];
+}
+
+/**
+ * Motor transaccional de fusión de expedientes (Smart Identity Stitching & Merge).
+ * Reasigna service_cases, journey_events, identity_links y patient_relationships
+ * de uno o más registros sombra (WhatsApp / Call Center / Invitado Web) al expediente maestro.
+ */
+export async function mergePatientProfiles(params: {
+  masterId: string;
+  secondaryIds: string[];
+  channel?: Channel;
+}): Promise<{
+  master: Patient;
+  mergedPatientIds: string[];
+  syncedCasesCount: number;
+}> {
+  const uniqueSecondaries = Array.from(
+    new Set(params.secondaryIds.filter((id) => id && id !== params.masterId))
+  );
+
+  const initialMaster = await prisma.patient.findUniqueOrThrow({
+    where: { id: params.masterId },
+  });
+
+  if (uniqueSecondaries.length === 0) {
+    return { master: initialMaster, mergedPatientIds: [], syncedCasesCount: 0 };
+  }
+
+  const secondaryRows = await prisma.patient.findMany({
+    where: { id: { in: uniqueSecondaries } },
+  });
+
+  const safeSecondaries = secondaryRows.filter((sec) =>
+    canSafelyMergePatients(initialMaster, sec)
+  );
+
+  if (safeSecondaries.length === 0) {
+    return { master: initialMaster, mergedPatientIds: [], syncedCasesCount: 0 };
+  }
+
+  const safeIds = safeSecondaries.map((s) => s.id);
+
+  const result = await prisma.$transaction(async (tx) => {
+    const master = await tx.patient.findUniqueOrThrow({ where: { id: params.masterId } });
+    let syncedCasesCount = 0;
+
+    // 1. Contar y reasignar todos los trámites (propios y solicitados) hacia el expediente maestro
+    const affectedCases = await tx.serviceCase.findMany({
+      where: {
+        OR: [{ patientId: { in: safeIds } }, { requesterPatientId: { in: safeIds } }],
+      },
+      select: { id: true, patientId: true, requesterPatientId: true },
+    });
+    syncedCasesCount = affectedCases.length;
+
+    await tx.serviceCase.updateMany({
+      where: { patientId: { in: safeIds } },
+      data: { patientId: master.id },
+    });
+
+    await tx.serviceCase.updateMany({
+      where: { requesterPatientId: { in: safeIds } },
+      data: { requesterPatientId: master.id },
+    });
+
+    // 2. Reasignar línea de tiempo inmutable de eventos
+    await tx.journeyEvent.updateMany({
+      where: { patientId: { in: safeIds } },
+      data: { patientId: master.id },
+    });
+
+    // 3. Consolidar identity_links evitando duplicados en uq_identity_type_hash
+    const masterLinks = await tx.identityLink.findMany({
+      where: { patientId: master.id },
+      select: { identifierType: true, identifierHash: true },
+    });
+    const masterLinkSet = new Set(
+      masterLinks.map((l) => `${l.identifierType}:${l.identifierHash}`)
+    );
+
+    const secondaryLinks = await tx.identityLink.findMany({
+      where: { patientId: { in: safeIds } },
+    });
+
+    for (const link of secondaryLinks) {
+      const key = `${link.identifierType}:${link.identifierHash}`;
+      if (masterLinkSet.has(key)) {
+        await tx.identityLink.delete({ where: { id: link.id } });
+      } else {
+        await tx.identityLink.update({
+          where: { id: link.id },
+          data: { patientId: master.id },
+        });
+        masterLinkSet.add(key);
+      }
+    }
+
+    // 4. Consolidar relaciones familiares (sin duplicar ni crear auto-relaciones)
+    const secRels = await tx.patientRelationship.findMany({
+      where: {
+        OR: [{ holderPatientId: { in: safeIds } }, { beneficiaryPatientId: { in: safeIds } }],
+      },
+    });
+
+    for (const rel of secRels) {
+      const nextHolderId = safeIds.includes(rel.holderPatientId)
+        ? master.id
+        : rel.holderPatientId;
+      const nextBeneficiaryId = safeIds.includes(rel.beneficiaryPatientId)
+        ? master.id
+        : rel.beneficiaryPatientId;
+
+      if (nextHolderId === nextBeneficiaryId) {
+        await tx.patientRelationship.delete({ where: { id: rel.id } });
+        continue;
+      }
+
+      const duplicate = await tx.patientRelationship.findUnique({
+        where: {
+          uq_holder_beneficiary: {
+            holderPatientId: nextHolderId,
+            beneficiaryPatientId: nextBeneficiaryId,
+          },
+        },
+      });
+
+      if (duplicate && duplicate.id !== rel.id) {
+        await tx.patientRelationship.delete({ where: { id: rel.id } });
+      } else {
+        await tx.patientRelationship.update({
+          where: { id: rel.id },
+          data: {
+            holderPatientId: nextHolderId,
+            beneficiaryPatientId: nextBeneficiaryId,
+          },
+        });
+      }
+    }
+
+    // 5. Completar campos faltantes en el maestro con datos útiles de los registros sombra
+    const backfill: Record<string, unknown> = {};
+    for (const sec of safeSecondaries) {
+      if (!master.firstName && !backfill.firstName && sec.firstName) {
+        backfill.firstName = sec.firstName;
+      }
+      if (!master.paternalLastName && !backfill.paternalLastName && sec.paternalLastName) {
+        backfill.paternalLastName = sec.paternalLastName;
+      }
+      if (!master.maternalLastName && !backfill.maternalLastName && sec.maternalLastName) {
+        backfill.maternalLastName = sec.maternalLastName;
+      }
+      if (!master.birthDate && !backfill.birthDate && sec.birthDate) {
+        backfill.birthDate = sec.birthDate;
+      }
+      if (!master.gender && !backfill.gender && sec.gender) {
+        backfill.gender = sec.gender;
+      }
+      if (!master.birthState && !backfill.birthState && sec.birthState) {
+        backfill.birthState = sec.birthState;
+      }
+      if (!master.phone && !backfill.phone && sec.phone) {
+        backfill.phone = sec.phone;
+      }
+      if (!master.curp && !backfill.curp && sec.curp) {
+        backfill.curp = sec.curp;
+      }
+      if (!master.email && !backfill.email && sec.email) {
+        backfill.email = sec.email;
+      }
+    }
+
+    // 6. Eliminar registros sombra (antes de aplicar curp/email únicos al maestro)
+    await tx.patient.deleteMany({
+      where: { id: { in: safeIds } },
+    });
+
+    const updatedMaster =
+      Object.keys(backfill).length > 0
+        ? await tx.patient.update({
+            where: { id: master.id },
+            data: backfill,
+          })
+        : master;
+
+    return {
+      master: updatedMaster,
+      mergedPatientIds: safeIds,
+      syncedCasesCount,
+    };
+  });
+
+  // 7. Publicar evento de vinculación en el trámite más reciente para refrescar SSE en vivo
+  if (result.syncedCasesCount > 0) {
+    const latestCase = await prisma.serviceCase.findFirst({
+      where: { OR: [{ patientId: result.master.id }, { requesterPatientId: result.master.id }] },
+      orderBy: { updatedAt: "desc" },
+    });
+    if (latestCase) {
+      await recordAndPublishEvent({
+        caseId: latestCase.id,
+        patientId: result.master.id,
+        journeyId: latestCase.journeyId,
+        channel: params.channel ?? Channel.SYSTEM,
+        actorRole: ActorRole.SYSTEM,
+        eventType: EventType.IDENTITY_LINKED,
+        payload: {
+          smartMerge: true,
+          mergedPatientCount: result.mergedPatientIds.length,
+          syncedCasesCount: result.syncedCasesCount,
+        },
+      }).catch(() => {});
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Busca todos los registros Patient coincidentes con un conjunto de identificadores
+ * (CURP, teléfono, correo, sesión web o WhatsApp LID) sin detenerse en el primero.
+ */
+async function findAllCandidatePatients(input: {
+  curp?: string;
+  phone?: string;
+  email?: string;
+  webSessionId?: string;
+  whatsappLid?: string;
+}): Promise<Patient[]> {
+  const byId = new Map<string, Patient>();
+
+  const add = (p: Patient | null | undefined) => {
+    if (p) byId.set(p.id, p);
+  };
+
+  if (input.curp) {
+    add(await findPatientByIdentifier(IdentifierType.CURP, input.curp));
+  }
+
+  if (input.phone) {
+    const normalizedPhone = normalizePhone(input.phone);
+    add(await findPatientByIdentifier(IdentifierType.PHONE, normalizedPhone));
+    // Buscar TODOS los Patient que compartan ese teléfono (incluyendo registros sombra de WhatsApp/Call Center)
+    const phoneMatches = await prisma.patient.findMany({
+      where: { phone: normalizedPhone },
+      orderBy: { createdAt: "asc" },
+      take: 15,
+    });
+    for (const pm of phoneMatches) add(pm);
+  }
+
+  if (input.email) {
+    add(await findPatientByIdentifier(IdentifierType.EMAIL, input.email.trim().toLowerCase()));
+  }
+
+  if (input.webSessionId) {
+    add(await findPatientByIdentifier(IdentifierType.WEB_SESSION, input.webSessionId));
+  }
+
+  if (input.whatsappLid) {
+    add(await findPatientByIdentifier(IdentifierType.APP, formatLidIdentifier(input.whatsappLid)));
+  }
+
+  return Array.from(byId.values());
+}
+
+/**
+ * Reconcilia de forma inteligente cualquier expediente sombra (creado en WhatsApp,
+ * Call Center o sesión invitada Web) que comparta teléfono, CURP o correo con el paciente maestro.
+ * Respeta estrictamente la separación de familiares con CURP distinta.
+ */
+export async function reconcilePatientOmnichannelHistory(
+  masterPatientId: string,
+  extra?: { webSessionId?: string; whatsappLid?: string; channel?: Channel }
+): Promise<{
+  patient: Patient;
+  mergedPatientIds: string[];
+  syncedCasesCount: number;
+}> {
+  const master = await prisma.patient.findUnique({ where: { id: masterPatientId } });
+  if (!master) {
+    throw new Error(`Paciente no encontrado: ${masterPatientId}`);
+  }
+
+  const candidates = await findAllCandidatePatients({
+    curp: master.curp ?? undefined,
+    phone: master.phone ?? undefined,
+    email: master.email ?? undefined,
+    webSessionId: extra?.webSessionId,
+    whatsappLid: extra?.whatsappLid,
+  });
+
+  const compatibleSecondaryIds = candidates
+    .filter((c) => canSafelyMergePatients(master, c))
+    .map((c) => c.id);
+
+  if (compatibleSecondaryIds.length === 0) {
+    return { patient: master, mergedPatientIds: [], syncedCasesCount: 0 };
+  }
+
+  const merged = await mergePatientProfiles({
+    masterId: master.id,
+    secondaryIds: compatibleSecondaryIds,
+    channel: extra?.channel ?? Channel.SYSTEM,
+  });
+
+  return {
+    patient: merged.master,
+    mergedPatientIds: merged.mergedPatientIds,
+    syncedCasesCount: merged.syncedCasesCount,
+  };
+}
+
+/**
+ * Identity Stitching progresivo y Vinculación Inteligente para el Titular de la cuenta/teléfono.
+ * - Si detecta múltiples registros del mismo titular (ej. WhatsApp + Web o Call Center + Web),
+ *   los fusiona automáticamente en un solo expediente maestro sin perder trámites ni eventos.
+ * - Respeta expedientes separados cuando existe una CURP diferente (familiares/terceros).
  */
 export async function resolveOrCreatePatient(input: RegisterPatientInput): Promise<Patient> {
   const normalizedPhone = input.phone ? normalizePhone(input.phone) : undefined;
   const normalizedCurp = input.curp ? input.curp.trim().toUpperCase() : undefined;
+  const normalizedEmail = input.email ? input.email.trim().toLowerCase() : undefined;
+
+  const allCandidates = await findAllCandidatePatients({
+    curp: normalizedCurp,
+    phone: normalizedPhone,
+    email: normalizedEmail,
+    webSessionId: input.webSessionId,
+    whatsappLid: input.whatsappLid,
+  });
+
+  // Filtrar candidatos compatibles con la CURP proporcionada (para nunca mezclar un familiar distinto)
+  const compatibleCandidates = allCandidates.filter((c) => {
+    if (
+      normalizedCurp &&
+      c.curp &&
+      c.curp.trim().toUpperCase() !== normalizedCurp
+    ) {
+      return false;
+    }
+    return true;
+  });
 
   let patient: Patient | null = null;
 
-  if (normalizedCurp) {
-    patient = await findPatientByIdentifier(IdentifierType.CURP, normalizedCurp);
-  }
-  if (!patient && normalizedPhone) {
-    patient = await findPatientByIdentifier(IdentifierType.PHONE, normalizedPhone);
-  }
-  if (!patient && input.webSessionId) {
-    patient = await findPatientByIdentifier(IdentifierType.WEB_SESSION, input.webSessionId);
-  }
-  if (!patient && input.email) {
-    patient = await findPatientByIdentifier(IdentifierType.EMAIL, input.email);
+  if (compatibleCandidates.length > 0) {
+    const master = pickCanonicalMaster(compatibleCandidates);
+    const secondaries = compatibleCandidates
+      .filter((c) => canSafelyMergePatients(master, c))
+      .map((c) => c.id);
+
+    if (secondaries.length > 0) {
+      const merged = await mergePatientProfiles({
+        masterId: master.id,
+        secondaryIds: secondaries,
+        channel: input.whatsappLid ? Channel.WHATSAPP : Channel.WEB,
+      });
+      patient = merged.master;
+    } else {
+      patient = master;
+    }
   }
 
   const profileData = {
@@ -193,11 +585,19 @@ export async function resolveOrCreatePatient(input: RegisterPatientInput): Promi
   if (normalizedCurp) {
     await upsertIdentityLink(patient.id, IdentifierType.CURP, normalizedCurp, false);
   }
-  if (input.email) {
-    await upsertIdentityLink(patient.id, IdentifierType.EMAIL, input.email, false);
+  if (normalizedEmail) {
+    await upsertIdentityLink(patient.id, IdentifierType.EMAIL, normalizedEmail, false);
   }
   if (input.webSessionId) {
     await upsertIdentityLink(patient.id, IdentifierType.WEB_SESSION, input.webSessionId, false);
+  }
+  if (input.whatsappLid) {
+    await upsertIdentityLink(
+      patient.id,
+      IdentifierType.APP,
+      formatLidIdentifier(input.whatsappLid),
+      false
+    );
   }
 
   return patient;
@@ -281,6 +681,210 @@ export async function resolveOrCreateBeneficiary(params: {
   return {
     beneficiary,
     relationshipLabel: RELATIONSHIP_LABELS[params.relationship] || "Familiar",
+  };
+}
+
+/**
+ * Solicita vinculación manual de trámites previos hechos desde otro teléfono o folio
+ * en WhatsApp / Call Center, emitiendo un reto Step-Up OTP en Redis (Consola 2FA).
+ */
+export async function requestChannelLinkChallenge(params: {
+  masterPatientId: string;
+  phone?: string;
+  folio?: string;
+}): Promise<{
+  ok: boolean;
+  message: string;
+  casesFound?: number;
+  destinationMasked?: string;
+  ttlSeconds?: number;
+}> {
+  const master = await prisma.patient.findUnique({ where: { id: params.masterPatientId } });
+  if (!master) return { ok: false, message: "Cuenta de paciente no encontrada." };
+
+  const targetPatientIds = new Set<string>();
+  const targetCaseIds = new Set<string>();
+  let destinationRaw = master.phone || "";
+
+  if (params.phone?.trim()) {
+    const normPhone = normalizePhone(params.phone);
+    destinationRaw = normPhone;
+    const phonePatients = await prisma.patient.findMany({
+      where: { phone: normPhone },
+      take: 10,
+    });
+    for (const p of phonePatients) {
+      if (canSafelyMergePatients(master, p)) {
+        targetPatientIds.add(p.id);
+      }
+    }
+    const linkMatch = await findPatientByIdentifier(IdentifierType.PHONE, normPhone);
+    if (linkMatch && canSafelyMergePatients(master, linkMatch)) {
+      targetPatientIds.add(linkMatch.id);
+    }
+  }
+
+  if (params.folio?.trim()) {
+    const cleanFolio = params.folio.trim().toUpperCase();
+    const recentCases = await prisma.serviceCase.findMany({
+      orderBy: { updatedAt: "desc" },
+      take: 100,
+      include: { patient: true },
+    });
+    for (const c of recentCases) {
+      const ctx = (c.contextJson ?? {}) as { appointment_folio?: string | null };
+      if (ctx.appointment_folio?.toUpperCase() === cleanFolio) {
+        if (c.patientId !== master.id) {
+          targetCaseIds.add(c.id);
+          if (canSafelyMergePatients(master, c.patient)) {
+            targetPatientIds.add(c.patientId);
+          }
+          if (!destinationRaw && c.patient.phone) {
+            destinationRaw = c.patient.phone;
+          }
+        }
+      }
+    }
+  }
+
+  const candidateCasesCount = await prisma.serviceCase.count({
+    where: {
+      OR: [
+        ...(targetPatientIds.size > 0
+          ? [{ patientId: { in: Array.from(targetPatientIds) } }]
+          : []),
+        ...(targetCaseIds.size > 0 ? [{ id: { in: Array.from(targetCaseIds) } }] : []),
+      ],
+    },
+  });
+
+  if (candidateCasesCount === 0 && targetPatientIds.size === 0) {
+    return {
+      ok: false,
+      message:
+        "No encontramos trámites pendientes de vincular con ese teléfono o folio (o ya forman parte de tu cuenta).",
+    };
+  }
+
+  const code = generateOtp6();
+  const otpHash = hashOtp(master.id, code);
+  const ttl = env.OTP_TTL_SECONDS;
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + ttl * 1000);
+
+  const record: ChannelLinkOtpRecord = {
+    otpHash,
+    targetPatientIds: Array.from(targetPatientIds),
+    targetCaseIds: Array.from(targetCaseIds),
+    phone: params.phone ? normalizePhone(params.phone) : undefined,
+    folio: params.folio?.trim().toUpperCase(),
+    attempts: 0,
+    createdAt: now.toISOString(),
+  };
+
+  await redis.set(CHANNEL_LINK_OTP_KEY(master.id), JSON.stringify(record), "EX", ttl);
+
+  const destinationMasked = destinationRaw
+    ? maskIdentifier(IdentifierType.PHONE, destinationRaw)
+    : "***-***-****";
+
+  const outboxEntry: OutboxOtpEntry = {
+    patientId: master.id,
+    patientMasked: maskPatientName(master.firstName, master.paternalLastName),
+    destinationMasked,
+    code,
+    channel: Channel.WEB,
+    caseId: Array.from(targetCaseIds)[0] || "LINK_CHANNEL",
+    createdAt: now.toISOString(),
+    expiresAt: expiresAt.toISOString(),
+  };
+  await redis.hset(OTP_OUTBOX_KEY, master.id, JSON.stringify(outboxEntry));
+
+  return {
+    ok: true,
+    message: `Encontramos ${candidateCasesCount} trámite(s). Enviamos un código OTP de 6 dígitos (Consola 2FA / SMS) para confirmar la vinculación.`,
+    casesFound: candidateCasesCount,
+    destinationMasked,
+    ttlSeconds: ttl,
+  };
+}
+
+/**
+ * Verifica el código OTP y ejecuta la vinculación inteligente del teléfono/folio secundario
+ * hacia la cuenta web autenticada.
+ */
+export async function verifyChannelLinkChallenge(params: {
+  masterPatientId: string;
+  otpCode: string;
+}): Promise<{
+  ok: boolean;
+  message: string;
+  syncedCasesCount?: number;
+}> {
+  const raw = await redis.get(CHANNEL_LINK_OTP_KEY(params.masterPatientId));
+  if (!raw) {
+    return { ok: false, message: "El código OTP expiró o no existe. Solicita uno nuevo." };
+  }
+
+  const record = JSON.parse(raw) as ChannelLinkOtpRecord;
+  const candidateHash = hashOtp(params.masterPatientId, params.otpCode);
+
+  if (candidateHash !== record.otpHash) {
+    const nextAttempts = record.attempts + 1;
+    const remaining = Math.max(0, env.OTP_MAX_ATTEMPTS - nextAttempts);
+    if (nextAttempts >= env.OTP_MAX_ATTEMPTS) {
+      await redis.del(CHANNEL_LINK_OTP_KEY(params.masterPatientId));
+      await redis.hdel(OTP_OUTBOX_KEY, params.masterPatientId);
+      return { ok: false, message: "Máximo de intentos excedido. Solicita un nuevo código." };
+    }
+    const ttlLeft = await redis.ttl(CHANNEL_LINK_OTP_KEY(params.masterPatientId));
+    await redis.set(
+      CHANNEL_LINK_OTP_KEY(params.masterPatientId),
+      JSON.stringify({ ...record, attempts: nextAttempts }),
+      "EX",
+      Math.max(10, ttlLeft)
+    );
+    return {
+      ok: false,
+      message: `Código OTP incorrecto. Intentos restantes: ${remaining}.`,
+    };
+  }
+
+  await redis.del(CHANNEL_LINK_OTP_KEY(params.masterPatientId));
+  await redis.hdel(OTP_OUTBOX_KEY, params.masterPatientId);
+
+  let syncedCasesCount = 0;
+
+  if (record.targetPatientIds.length > 0) {
+    const merged = await mergePatientProfiles({
+      masterId: params.masterPatientId,
+      secondaryIds: record.targetPatientIds,
+      channel: Channel.WEB,
+    });
+    syncedCasesCount += merged.syncedCasesCount;
+  }
+
+  if (record.targetCaseIds.length > 0) {
+    const upd = await prisma.serviceCase.updateMany({
+      where: {
+        id: { in: record.targetCaseIds },
+        patientId: { not: params.masterPatientId },
+      },
+      data: {
+        requesterPatientId: params.masterPatientId,
+      },
+    });
+    syncedCasesCount += upd.count;
+  }
+
+  if (record.phone) {
+    await upsertIdentityLink(params.masterPatientId, IdentifierType.PHONE, record.phone, true);
+  }
+
+  return {
+    ok: true,
+    message: `Vinculación completada. Se sincronizaron ${syncedCasesCount} trámite(s) a tu historial.`,
+    syncedCasesCount,
   };
 }
 
@@ -442,13 +1046,21 @@ export async function listActiveOtpOutbox(): Promise<Array<OutboxOtpEntry & { tt
   const results: Array<OutboxOtpEntry & { ttlSeconds: number }> = [];
 
   for (const [patientId, raw] of Object.entries(all)) {
-    const ttl = await redis.ttl(OTP_KEY(patientId));
+    const [ttlCase, ttlLink] = await Promise.all([
+      redis.ttl(OTP_KEY(patientId)),
+      redis.ttl(CHANNEL_LINK_OTP_KEY(patientId)),
+    ]);
+    const ttl = Math.max(ttlCase, ttlLink);
     if (ttl <= 0) {
       await redis.hdel(OTP_OUTBOX_KEY, patientId);
       continue;
     }
-    const parsed = JSON.parse(raw) as OutboxOtpEntry;
-    results.push({ ...parsed, ttlSeconds: ttl });
+    try {
+      const parsed = JSON.parse(raw) as OutboxOtpEntry;
+      results.push({ ...parsed, ttlSeconds: ttl });
+    } catch {
+      await redis.hdel(OTP_OUTBOX_KEY, patientId);
+    }
   }
 
   return results.sort((a, b) => b.createdAt.localeCompare(a.createdAt));

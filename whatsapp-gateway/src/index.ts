@@ -30,6 +30,17 @@ interface SignedOutboundEnvelope {
 
 let activeSock: WASocket | null = null;
 const lastKnownJidByPhone = new Map<string, string>();
+const lidToPhoneMap = new Map<string, string>();
+
+function registerLidPhoneMapping(lid?: string | null, phoneJid?: string | null) {
+  if (!lid || !phoneJid) return;
+  if (!lid.endsWith("@lid") || !phoneJid.endsWith("@s.whatsapp.net")) return;
+  const phoneDigits = normalizeDigits(phoneJid.split("@")[0]);
+  if (phoneDigits.length >= 10 && phoneDigits.length <= 13) {
+    lidToPhoneMap.set(lid, `+${phoneDigits}`);
+    lastKnownJidByPhone.set(phoneDigits, lid);
+  }
+}
 
 function normalizeDigits(raw: string): string {
   const digits = raw.replace(/\D/g, "");
@@ -65,12 +76,16 @@ async function forwardInboundToOrchestrator(params: {
   messageId: string;
   fromPhone: string;
   remoteJid: string;
+  whatsappLid?: string;
+  isUnresolvedLid?: boolean;
   text: string;
 }) {
   const bodyObj = {
     messageId: params.messageId,
     fromPhone: params.fromPhone,
     remoteJid: params.remoteJid,
+    ...(params.whatsappLid ? { whatsappLid: params.whatsappLid } : {}),
+    ...(params.isUnresolvedLid ? { isUnresolvedLid: true } : {}),
     text: params.text,
     receivedAt: new Date().toISOString(),
   };
@@ -252,6 +267,25 @@ async function startBaileysClient() {
 
   sock.ev.on("creds.update", saveCreds);
 
+  // Alimentar tabla LID <-> telefono real a partir de eventos de contactos de Baileys
+  sock.ev.on("contacts.upsert", (contacts) => {
+    for (const c of contacts as Array<{ id?: string; lid?: string; phoneNumber?: string }>) {
+      if (c.lid && c.id) registerLidPhoneMapping(c.lid, c.id);
+      if (c.id?.endsWith("@lid") && c.phoneNumber) {
+        registerLidPhoneMapping(c.id, `${normalizeDigits(c.phoneNumber)}@s.whatsapp.net`);
+      }
+    }
+  });
+
+  sock.ev.on("contacts.update", (updates) => {
+    for (const c of updates as Array<{ id?: string; lid?: string; phoneNumber?: string }>) {
+      if (c.lid && c.id) registerLidPhoneMapping(c.lid, c.id);
+      if (c.id?.endsWith("@lid") && c.phoneNumber) {
+        registerLidPhoneMapping(c.id, `${normalizeDigits(c.phoneNumber)}@s.whatsapp.net`);
+      }
+    }
+  });
+
   sock.ev.on("connection.update", (update) => {
     const { connection, lastDisconnect, qr } = update;
 
@@ -299,30 +333,42 @@ async function startBaileysClient() {
       const text = extractTextMessage(msg)?.trim();
       if (!text) continue;
 
-      // Resolucion de LID (@lid) de WhatsApp moderno hacia el telefono real cuando Baileys trae remoteJidAlt
+      // Resolucion inteligente de LID (@lid) de WhatsApp moderno hacia el telefono real
       const keyAny = msg.key as unknown as {
         remoteJid?: string;
         remoteJidAlt?: string;
         participantAlt?: string;
       };
-      const phoneSourceJid =
-        remoteJid.endsWith("@lid") && (keyAny.remoteJidAlt || keyAny.participantAlt)
-          ? (keyAny.remoteJidAlt || keyAny.participantAlt)!
-          : remoteJid;
+      const isLidJid = remoteJid.endsWith("@lid");
+      const altJid = keyAny.remoteJidAlt || keyAny.participantAlt;
+      if (isLidJid && altJid) {
+        registerLidPhoneMapping(remoteJid, altJid);
+      }
 
+      const mappedPhone = isLidJid ? lidToPhoneMap.get(remoteJid) : undefined;
+      const phoneSourceJid = isLidJid && altJid ? altJid : remoteJid;
       const phoneDigits = phoneSourceJid.split("@")[0].replace(/\D/g, "");
-      if (!phoneDigits) continue;
+      if (!phoneDigits && !mappedPhone) continue;
 
-      const fromPhone = `+${phoneDigits}`;
-      lastKnownJidByPhone.set(normalizeDigits(fromPhone), remoteJid);
+      const isUnresolvedLid = isLidJid && !altJid && !mappedPhone;
+      const fromPhone = mappedPhone || `+${normalizeDigits(phoneDigits)}`;
+      const whatsappLid = isLidJid ? remoteJid : undefined;
+
+      if (!isUnresolvedLid) {
+        lastKnownJidByPhone.set(normalizeDigits(fromPhone), remoteJid);
+      }
 
       console.log(
-        `[WhatsApp -> Gateway] Mensaje de ${fromPhone} (jid=${remoteJid}): "${text}"`
+        `[WhatsApp -> Gateway] Mensaje de ${fromPhone} (jid=${remoteJid}${
+          isUnresolvedLid ? ", LID sin resolver" : ""
+        }): "${text}"`
       );
       await forwardInboundToOrchestrator({
         messageId: msg.key.id || `baileys_${Date.now()}`,
         fromPhone,
         remoteJid,
+        whatsappLid,
+        isUnresolvedLid,
         text,
       });
     }

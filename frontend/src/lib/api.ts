@@ -98,7 +98,18 @@ export function savePatientSession(data: PatientAuthResponse): void {
   if (data.patient.telefono) {
     setLastPatientPhone(data.patient.telefono);
   }
+  if (typeof data.syncedCasesCount === "number" && data.syncedCasesCount > 0) {
+    sessionStorage.setItem("sd_patient_synced_cases_count", String(data.syncedCasesCount));
+  }
   window.dispatchEvent(new Event("sd-patient-auth-change"));
+}
+
+export function consumeLastSyncedCasesCount(): number {
+  const raw = sessionStorage.getItem("sd_patient_synced_cases_count");
+  if (!raw) return 0;
+  sessionStorage.removeItem("sd_patient_synced_cases_count");
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 export function clearPatientSession(): void {
@@ -358,6 +369,30 @@ export const api = {
 
   getPatientMe: (token: string) =>
     request<PatientMeResponse>("/api/patients/me", { token }),
+
+  requestChannelLink: (token: string, payload: { phone?: string; folio?: string }) =>
+    request<{
+      ok: boolean;
+      message: string;
+      casesFound?: number;
+      destinationMasked?: string;
+      ttlSeconds?: number;
+    }>("/api/patients/me/link-channel/request", {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    }),
+
+  verifyChannelLink: (token: string, otpCode: string) =>
+    request<{
+      ok: boolean;
+      message: string;
+      syncedCasesCount?: number;
+    }>("/api/patients/me/link-channel/verify", {
+      method: "POST",
+      token,
+      body: JSON.stringify({ otpCode }),
+    }),
 
   // Rol Administrador (Observabilidad)
   getAdminOverview: (token: string) =>

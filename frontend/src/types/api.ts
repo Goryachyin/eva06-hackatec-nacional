@@ -215,6 +215,7 @@ export interface PatientProfile {
 export interface PatientAuthResponse {
   token: string;
   patient: PatientProfile;
+  syncedCasesCount?: number;
 }
 
 export interface PatientBeneficiaryItem {
@@ -245,6 +246,7 @@ export interface PatientMeResponse {
   patient: PatientProfile;
   beneficiaries?: PatientBeneficiaryItem[];
   cases: PatientCaseWithEvents[];
+  syncedCasesCount?: number;
 }
 
 export interface AdminUserLookupItem {

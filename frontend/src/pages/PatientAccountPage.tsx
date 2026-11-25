@@ -6,10 +6,11 @@ import {
   api,
   ApiError,
   clearPatientSession,
+  consumeLastSyncedCasesCount,
   getApiBaseUrl,
   getPatientToken,
 } from "../lib/api";
-import { formatDateTime, formatMoney } from "../lib/constants";
+import { CHANNEL_META, formatDateTime, formatMoney } from "../lib/constants";
 import {
   PatientBeneficiaryItem,
   PatientCaseWithEvents,
@@ -26,6 +27,22 @@ export const PatientAccountPage: React.FC = () => {
   const [resumingId, setResumingId] = useState<string | null>(null);
   const [sseLive, setSseLive] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncBanner, setSyncBanner] = useState<string | null>(() => {
+    const initialSynced = consumeLastSyncedCasesCount();
+    return initialSynced > 0
+      ? `Vinculación inteligente completada: sincronizamos ${initialSynced} trámite(s) previo(s) de tus canales (Sitio Web, WhatsApp y Call Center) en tu historial.`
+      : null;
+  });
+
+  // Vinculación manual opcional (otro número de WhatsApp/teléfono o folio con reto OTP)
+  const [showLinkForm, setShowLinkForm] = useState(false);
+  const [linkPhone, setLinkPhone] = useState("");
+  const [linkFolio, setLinkFolio] = useState("");
+  const [linkOtpSent, setLinkOtpSent] = useState(false);
+  const [linkOtpCode, setLinkOtpCode] = useState("");
+  const [linkLoading, setLinkLoading] = useState(false);
+  const [linkMessage, setLinkMessage] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
 
   const loadAccount = useCallback(async () => {
     if (!token) {
@@ -37,6 +54,11 @@ export const PatientAccountPage: React.FC = () => {
       setProfile(res.patient);
       setBeneficiaries(res.beneficiaries || []);
       setCases(res.cases || []);
+      if (res.syncedCasesCount && res.syncedCasesCount > 0) {
+        setSyncBanner(
+          `Vinculación inteligente: se sincronizaron ${res.syncedCasesCount} trámite(s) adicional(es) desde WhatsApp o Call Center.`
+        );
+      }
       setError(null);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -79,6 +101,52 @@ export const PatientAccountPage: React.FC = () => {
     }
   };
 
+  const handleRequestLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || (!linkPhone.trim() && !linkFolio.trim())) return;
+    setLinkLoading(true);
+    setLinkError(null);
+    setLinkMessage(null);
+    try {
+      const res = await api.requestChannelLink(token, {
+        ...(linkPhone.trim() ? { phone: linkPhone.trim() } : {}),
+        ...(linkFolio.trim() ? { folio: linkFolio.trim() } : {}),
+      });
+      setLinkOtpSent(true);
+      setLinkMessage(res.message);
+    } catch (err) {
+      setLinkError(
+        err instanceof Error
+          ? err.message
+          : "No encontramos trámites pendientes de vincular con esos datos."
+      );
+    } finally {
+      setLinkLoading(false);
+    }
+  };
+
+  const handleVerifyLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || linkOtpCode.trim().length !== 6) return;
+    setLinkLoading(true);
+    setLinkError(null);
+    try {
+      const res = await api.verifyChannelLink(token, linkOtpCode.trim());
+      setSyncBanner(res.message);
+      setShowLinkForm(false);
+      setLinkOtpSent(false);
+      setLinkPhone("");
+      setLinkFolio("");
+      setLinkOtpCode("");
+      setLinkMessage(null);
+      await loadAccount();
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : "No se pudo verificar el código OTP.");
+    } finally {
+      setLinkLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-sm text-[#52606D]">
@@ -97,7 +165,7 @@ export const PatientAccountPage: React.FC = () => {
       <header className="pb-8 border-b border-[#E4E7EB] flex flex-col md:flex-row md:items-end justify-between gap-6">
         <div className="space-y-2">
           <p className="text-xs font-semibold uppercase tracking-wider text-[#00875A]">
-            Mi cuenta · {sseLive ? "Seguimiento en tiempo real activo" : "Sincronizando"}
+            Mi cuenta · {sseLive ? "Seguimiento omnicanal en tiempo real" : "Sincronizando"}
           </p>
           <h1 className="text-3xl font-bold text-[#1F2933]">
             {fullName || "Paciente Salud Digna"}
@@ -140,6 +208,142 @@ export const PatientAccountPage: React.FC = () => {
           </Link>
         </div>
       </header>
+
+      {syncBanner && (
+        <div className="border-l-2 border-[#00875A] pl-4 py-1 flex items-center justify-between gap-4 text-sm text-[#00875A]">
+          <p className="font-medium">{syncBanner}</p>
+          <button
+            type="button"
+            onClick={() => setSyncBanner(null)}
+            className="text-xs font-semibold text-[#52606D] hover:text-[#1F2933] shrink-0"
+          >
+            Ocultar
+          </button>
+        </div>
+      )}
+
+      {/* Vinculación asistida para trámites hechos desde otro número de WhatsApp o Call Center */}
+      <section className="pb-6 border-b border-[#E4E7EB] space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold text-[#1F2933]">
+              Sincronización omnicanal (Sitio Web, WhatsApp y Call Center)
+            </h2>
+            <p className="text-xs text-[#52606D] mt-0.5">
+              Tus citas registradas con tu teléfono o CURP se sincronizan automáticamente. Si
+              agendaste desde otro número o tienes un folio previo, puedes vincularlo aquí.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setShowLinkForm((prev) => !prev);
+              setLinkError(null);
+              setLinkMessage(null);
+            }}
+            className="self-start sm:self-center text-xs font-semibold text-[#00875A] hover:underline shrink-0"
+          >
+            {showLinkForm ? "Cerrar vinculación" : "Vincular otro teléfono o folio →"}
+          </button>
+        </div>
+
+        {showLinkForm && (
+          <div className="pt-4 border-t border-[#E4E7EB] space-y-4 max-w-2xl">
+            {linkError && (
+              <p className="border-l-2 border-[#B42318] pl-3 text-xs text-[#B42318]">{linkError}</p>
+            )}
+            {linkMessage && (
+              <p className="border-l-2 border-[#00875A] pl-3 text-xs text-[#00875A]">
+                {linkMessage}
+              </p>
+            )}
+
+            {!linkOtpSent ? (
+              <form onSubmit={handleRequestLink} className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+                <div className="sm:col-span-5">
+                  <label
+                    htmlFor="link-phone"
+                    className="block text-xs font-semibold text-[#1F2933] mb-1"
+                  >
+                    Teléfono usado en WhatsApp / Call Center
+                  </label>
+                  <input
+                    id="link-phone"
+                    type="tel"
+                    value={linkPhone}
+                    onChange={(e) => setLinkPhone(e.target.value)}
+                    placeholder="10 dígitos o +52..."
+                    className="w-full h-10 border border-[#E4E7EB] px-3 text-xs text-[#1F2933] focus:border-[#00875A]"
+                  />
+                </div>
+                <div className="sm:col-span-4">
+                  <label
+                    htmlFor="link-folio"
+                    className="block text-xs font-semibold text-[#1F2933] mb-1"
+                  >
+                    O folio de cita (opcional)
+                  </label>
+                  <input
+                    id="link-folio"
+                    type="text"
+                    value={linkFolio}
+                    onChange={(e) => setLinkFolio(e.target.value.toUpperCase())}
+                    placeholder="SD-2026-0000"
+                    className="w-full h-10 border border-[#E4E7EB] px-3 text-xs font-mono text-[#1F2933] focus:border-[#00875A]"
+                  />
+                </div>
+                <div className="sm:col-span-3">
+                  <button
+                    type="submit"
+                    disabled={linkLoading || (!linkPhone.trim() && !linkFolio.trim())}
+                    className="w-full h-10 border border-[#00875A] bg-[#00875A] text-[#FFFFFF] text-xs font-semibold hover:bg-[#006B47] transition-colors disabled:opacity-50"
+                  >
+                    {linkLoading ? "Buscando..." : "Solicitar OTP"}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleVerifyLink} className="flex flex-col sm:flex-row items-end gap-3">
+                <div className="flex-1 w-full">
+                  <label
+                    htmlFor="link-otp"
+                    className="block text-xs font-semibold text-[#1F2933] mb-1"
+                  >
+                    Código de verificación OTP (6 dígitos · Consola 2FA / SMS)
+                  </label>
+                  <input
+                    id="link-otp"
+                    type="text"
+                    maxLength={6}
+                    value={linkOtpCode}
+                    onChange={(e) => setLinkOtpCode(e.target.value.replace(/\D/g, ""))}
+                    placeholder="000000"
+                    required
+                    className="w-full h-10 border border-[#E4E7EB] px-3 text-sm font-mono tracking-widest text-[#1F2933] focus:border-[#00875A]"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={linkLoading || linkOtpCode.length !== 6}
+                  className="h-10 px-5 border border-[#00875A] bg-[#00875A] text-[#FFFFFF] text-xs font-semibold hover:bg-[#006B47] transition-colors disabled:opacity-50 shrink-0"
+                >
+                  {linkLoading ? "Vinculando..." : "Confirmar vinculación"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLinkOtpSent(false);
+                    setLinkOtpCode("");
+                  }}
+                  className="h-10 px-3 border border-[#E4E7EB] text-xs font-semibold text-[#52606D] hover:text-[#1F2933] shrink-0"
+                >
+                  Volver
+                </button>
+              </form>
+            )}
+          </div>
+        )}
+      </section>
 
       {/* Familiares y beneficiarios en lista vertical */}
       {beneficiaries.length > 0 && (
@@ -210,12 +414,21 @@ export const PatientAccountPage: React.FC = () => {
             {cases.map((c) => {
               const isConfirmed =
                 c.currentState === "CITA_CONFIRMADA" && Boolean(c.contextJson.appointment_folio);
+              const originChannel = c.journeyEvents?.[0]?.channel ?? c.currentChannel;
 
               return (
                 <li key={c.id} className="py-8 space-y-6">
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                     <div>
-                      <h3 className="text-xl font-bold text-[#1F2933]">
+                      <p className="text-xs font-semibold text-[#00875A]">
+                        Iniciado en {CHANNEL_META[originChannel]?.label || originChannel}
+                        {originChannel !== c.currentChannel
+                          ? ` · Último canal: ${
+                              CHANNEL_META[c.currentChannel]?.label || c.currentChannel
+                            }`
+                          : ""}
+                      </p>
+                      <h3 className="text-xl font-bold text-[#1F2933] mt-0.5">
                         {c.contextJson.study?.name || "Solicitud de estudio en proceso"}
                       </h3>
                       <p className="text-xs text-[#52606D] mt-1">

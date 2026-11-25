@@ -37,6 +37,7 @@ export interface CaseContextJson {
     date: string;
     time: string;
   };
+  payment_method?: "online" | "oxxo" | "clinic";
   open_questions?: string[];
   appointment_folio?: string | null;
   qr_payload?: string | null;
