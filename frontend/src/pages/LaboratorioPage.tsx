@@ -8,58 +8,32 @@ import {
   getStoredPatient,
   setLastPatientPhone,
 } from "../lib/api";
+import {
+  clearBookingDraft,
+  findStateCodeByNameOrCode,
+  formatDateDisplay,
+  getBookingDraft,
+  getDefaultTomorrowIso,
+  getPreparationSteps,
+  inferResumeStep,
+  normalizedPhoneForSubmit,
+  parseCurpMetadata,
+  PaymentMethod,
+  RELATIONSHIP_OPTIONS,
+  saveBookingDraft,
+  TIME_SLOTS,
+  WizardStep,
+} from "../lib/bookingContext";
 import { formatMoney, STATE_META } from "../lib/constants";
 import { generateDeterministicCurp, MEXICAN_STATES } from "../lib/curp";
 import {
   ClinicItem,
   PatientBeneficiaryItem,
+  PatientCaseWithEvents,
   RelationshipType,
   ServiceCase,
   StudyItem,
 } from "../types/api";
-
-type WizardStep = 1 | 2 | 3;
-
-const TIME_SLOTS = ["07:30", "08:30", "09:30", "10:30", "11:30", "13:00", "16:00"];
-
-const RELATIONSHIP_OPTIONS: Array<{ value: RelationshipType; label: string }> = [
-  { value: "HIJO_A", label: "Hijo / Hija" },
-  { value: "PADRE_MADRE", label: "Padre / Madre" },
-  { value: "CONYUGE", label: "Esposo / Esposa (Cónyuge)" },
-  { value: "ABUELO_A", label: "Abuelo / Abuela" },
-  { value: "FAMILIAR", label: "Otro familiar" },
-  { value: "CONOCIDO", label: "Conocido / Amigo" },
-];
-
-function findStateCodeByNameOrCode(val: string | null | undefined): string {
-  if (!val) return "";
-  const clean = val
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toUpperCase()
-    .trim();
-  const match = MEXICAN_STATES.find(
-    (st) =>
-      st.code === clean ||
-      st.name
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toUpperCase() === clean
-  );
-  return match?.code || "";
-}
-
-function getPreparationSteps(prepText: string): string[] {
-  const parts = prepText
-    .split(/\.|;/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  if (parts.length > 1) return parts;
-  return [
-    prepText.trim(),
-    "Presentar identificación oficial vigente y folio de cita en recepción 15 minutos antes.",
-  ];
-}
 
 export const LaboratorioPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -77,6 +51,7 @@ export const LaboratorioPage: React.FC = () => {
   const [studies, setStudies] = useState<StudyItem[]>([]);
   const [clinics, setClinics] = useState<ClinicItem[]>([]);
   const [savedBeneficiaries, setSavedBeneficiaries] = useState<PatientBeneficiaryItem[]>([]);
+  const [pendingResumeCase, setPendingResumeCase] = useState<PatientCaseWithEvents | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>(initialCat);
@@ -85,10 +60,7 @@ export const LaboratorioPage: React.FC = () => {
   // Paso 1: Estudio, Clínica y Horario
   const [selectedStudyCode, setSelectedStudyCode] = useState<string>("US-OBS");
   const [selectedClinicId, setSelectedClinicId] = useState<string>("CLN-CUL-01");
-  const [preferredDate, setPreferredDate] = useState<string>(() => {
-    const tomorrow = new Date(Date.now() + 86400000);
-    return tomorrow.toISOString().slice(0, 10);
-  });
+  const [preferredDate, setPreferredDate] = useState<string>(getDefaultTomorrowIso);
   const [preferredTime, setPreferredTime] = useState<string>("09:30");
 
   // Selector Multibeneficiario
@@ -97,7 +69,9 @@ export const LaboratorioPage: React.FC = () => {
   const [thirdPartyConsent, setThirdPartyConsent] = useState<boolean>(false);
 
   // Paso 2: Campos oficiales "Perfil del paciente"
-  const [nombres, setNombres] = useState(() => (!forBeneficiaryParam ? loggedPatient?.nombres || "" : ""));
+  const [nombres, setNombres] = useState(() =>
+    !forBeneficiaryParam ? loggedPatient?.nombres || "" : ""
+  );
   const [apellidoPaterno, setApellidoPaterno] = useState(() =>
     !forBeneficiaryParam ? loggedPatient?.apellido_paterno || "" : ""
   );
@@ -126,15 +100,17 @@ export const LaboratorioPage: React.FC = () => {
   const dateInputRef = useRef<HTMLInputElement | null>(null);
 
   // Estado del trámite en el backend
+  const [syncingStep, setSyncingStep] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
   const [activeCase, setActiveCase] = useState<ServiceCase | null>(null);
   const [confirmedFolio, setConfirmedFolio] = useState<{ folio: string; qrPayload: string } | null>(
     null
   );
 
   // Paso 3: Pago, Confirmación y Guardado
-  const [paymentMethod, setPaymentMethod] = useState<"online" | "oxxo" | "clinic">("online");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("online");
   const [savedForLater, setSavedForLater] = useState(false);
   const [savingLater, setSavingLater] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -155,6 +131,93 @@ export const LaboratorioPage: React.FC = () => {
     if (loggedPatient?.telefono) setTelefono(loggedPatient.telefono);
   };
 
+  const hydrateFromCase = (foundCase: ServiceCase) => {
+    const draft = getBookingDraft(foundCase.id);
+    setActiveCase(foundCase);
+    setSavedForLater(false);
+    setDraftNotice(null);
+
+    if (foundCase.contextJson.study?.code) {
+      setSelectedStudyCode(foundCase.contextJson.study.code);
+    } else if (draft?.selectedStudyCode) {
+      setSelectedStudyCode(draft.selectedStudyCode);
+    }
+
+    if (foundCase.contextJson.clinic?.id) {
+      setSelectedClinicId(foundCase.contextJson.clinic.id);
+    } else if (draft?.selectedClinicId) {
+      setSelectedClinicId(draft.selectedClinicId);
+    }
+
+    if (foundCase.contextJson.preferred_slot?.date) {
+      setPreferredDate(foundCase.contextJson.preferred_slot.date);
+    } else if (draft?.preferredDate) {
+      setPreferredDate(draft.preferredDate);
+    }
+
+    if (foundCase.contextJson.preferred_slot?.time) {
+      setPreferredTime(foundCase.contextJson.preferred_slot.time);
+    } else if (draft?.preferredTime) {
+      setPreferredTime(draft.preferredTime);
+    }
+
+    if (draft) {
+      if (draft.forThirdParty !== undefined) setForThirdParty(draft.forThirdParty);
+      if (draft.relationship) setRelationship(draft.relationship);
+      if (draft.thirdPartyConsent !== undefined) setThirdPartyConsent(draft.thirdPartyConsent);
+      if (draft.nombres) setNombres(draft.nombres);
+      if (draft.apellidoPaterno) setApellidoPaterno(draft.apellidoPaterno);
+      if (draft.apellidoMaterno) setApellidoMaterno(draft.apellidoMaterno);
+      if (draft.fechaNacimiento) setFechaNacimiento(draft.fechaNacimiento);
+      if (draft.genero) setGenero(draft.genero);
+      if (draft.estadoNacimientoCode) setEstadoNacimientoCode(draft.estadoNacimientoCode);
+      if (draft.pais) setPais(draft.pais);
+      if (draft.curp) {
+        setCurp(draft.curp);
+        setCurpManuallyEdited(true);
+      }
+      if (draft.telefono) setTelefono(draft.telefono);
+      if (draft.paymentMethod) setPaymentMethod(draft.paymentMethod);
+    } else if (loggedPatient?.curp) {
+      const parsed = parseCurpMetadata(loggedPatient.curp);
+      if (!fechaNacimiento && parsed.fechaNacimiento) setFechaNacimiento(parsed.fechaNacimiento);
+      if (!genero && parsed.genero) setGenero(parsed.genero);
+      if (!estadoNacimientoCode && parsed.estadoNacimientoCode) {
+        setEstadoNacimientoCode(parsed.estadoNacimientoCode);
+      }
+    }
+
+    if (foundCase.contextJson.appointment_folio) {
+      setConfirmedFolio({
+        folio: foundCase.contextJson.appointment_folio,
+        qrPayload: foundCase.contextJson.qr_payload || "",
+      });
+    } else {
+      setConfirmedFolio(null);
+    }
+
+    const effectiveNombres = draft?.nombres || loggedPatient?.nombres || "";
+    const effectivePaterno = draft?.apellidoPaterno || loggedPatient?.apellido_paterno || "";
+    const effectiveCurp = draft?.curp || loggedPatient?.curp || "";
+    const effectivePhone = draft?.telefono || loggedPatient?.telefono || "";
+
+    const hasCompleteProfile =
+      effectiveNombres.trim().length >= 2 &&
+      effectivePaterno.trim().length >= 2 &&
+      effectiveCurp.trim().length === 18 &&
+      effectivePhone.replace(/\D/g, "").length >= 10;
+
+    const targetStep = inferResumeStep({
+      currentState: foundCase.currentState,
+      hasStudy: Boolean(foundCase.contextJson.study?.code),
+      hasClinic: Boolean(foundCase.contextJson.clinic?.id),
+      hasCompleteProfile,
+      hasFolio: Boolean(foundCase.contextJson.appointment_folio),
+      draft,
+    });
+    setStep(targetStep);
+  };
+
   useEffect(() => {
     let active = true;
     setCatalogLoading(true);
@@ -162,8 +225,11 @@ export const LaboratorioPage: React.FC = () => {
     Promise.all([
       api.getCatalog(),
       patientToken ? api.getPatientMe(patientToken).catch(() => null) : Promise.resolve(null),
+      !patientToken
+        ? api.lookupWebCase({ webSessionId: getOrCreateWebSessionId() }).catch(() => null)
+        : Promise.resolve(null),
     ])
-      .then(([catRes, meRes]) => {
+      .then(([catRes, meRes, guestLookup]) => {
         if (!active) return;
         setStudies(catRes.studies);
         setClinics(catRes.clinics);
@@ -191,31 +257,21 @@ export const LaboratorioPage: React.FC = () => {
           if (resumeCaseIdParam) {
             const foundCase = (meRes.cases || []).find((c) => c.id === resumeCaseIdParam);
             if (foundCase) {
-              setActiveCase(foundCase);
-              if (foundCase.contextJson.study?.code) {
-                setSelectedStudyCode(foundCase.contextJson.study.code);
-              }
-              if (foundCase.contextJson.clinic?.id) {
-                setSelectedClinicId(foundCase.contextJson.clinic.id);
-              }
-              if (foundCase.contextJson.preferred_slot?.date) {
-                setPreferredDate(foundCase.contextJson.preferred_slot.date);
-              }
-              if (foundCase.contextJson.preferred_slot?.time) {
-                setPreferredTime(foundCase.contextJson.preferred_slot.time);
-              }
-              if (foundCase.contextJson.appointment_folio) {
-                setConfirmedFolio({
-                  folio: foundCase.contextJson.appointment_folio,
-                  qrPayload: foundCase.contextJson.qr_payload || "",
-                });
-              }
-              if (foundCase.contextJson.study && foundCase.contextJson.clinic) {
-                setStep(3);
-              } else {
-                setStep(1);
-              }
+              hydrateFromCase(foundCase);
             }
+          } else {
+            const latestOpen = (meRes.cases || []).find(
+              (c) => c.currentState !== "CITA_CONFIRMADA"
+            );
+            if (latestOpen) {
+              setPendingResumeCase(latestOpen);
+            }
+          }
+        } else if (guestLookup?.case && guestLookup.case.currentState !== "CITA_CONFIRMADA") {
+          if (resumeCaseIdParam === guestLookup.case.id) {
+            hydrateFromCase(guestLookup.case);
+          } else {
+            setPendingResumeCase(guestLookup.case);
           }
         }
       })
@@ -233,6 +289,56 @@ export const LaboratorioPage: React.FC = () => {
       active = false;
     };
   }, [initialCat, patientToken, resumeCaseIdParam, forBeneficiaryParam]);
+
+  // Guardar borrador local sincronizado cada vez que cambia el avance de un caso activo
+  useEffect(() => {
+    if (!activeCase?.id || confirmedFolio) return;
+    saveBookingDraft({
+      caseId: activeCase.id,
+      webSessionId: getOrCreateWebSessionId(),
+      step,
+      selectedStudyCode,
+      selectedClinicId,
+      preferredDate,
+      preferredTime,
+      forThirdParty,
+      relationship,
+      thirdPartyConsent,
+      nombres,
+      apellidoPaterno,
+      apellidoMaterno,
+      fechaNacimiento,
+      genero,
+      estadoNacimientoCode,
+      pais,
+      curp,
+      telefono,
+      paymentMethod,
+      updatedAt: new Date().toISOString(),
+      updatedByChannel: "WEB",
+    });
+  }, [
+    activeCase?.id,
+    confirmedFolio,
+    step,
+    selectedStudyCode,
+    selectedClinicId,
+    preferredDate,
+    preferredTime,
+    forThirdParty,
+    relationship,
+    thirdPartyConsent,
+    nombres,
+    apellidoPaterno,
+    apellidoMaterno,
+    fechaNacimiento,
+    genero,
+    estadoNacimientoCode,
+    pais,
+    curp,
+    telefono,
+    paymentMethod,
+  ]);
 
   const applySelfPreset = () => {
     setForThirdParty(false);
@@ -322,13 +428,6 @@ export const LaboratorioPage: React.FC = () => {
     [clinics, selectedClinicId]
   );
 
-  const normalizedPhoneForSubmit = (raw: string): string => {
-    const digits = raw.replace(/\D/g, "");
-    if (digits.length === 10) return `+52${digits}`;
-    if (digits.startsWith("52") && digits.length >= 12) return `+${digits}`;
-    return raw.trim();
-  };
-
   const isProfileValid = useMemo(() => {
     const cleanPhoneDigits = telefono.replace(/\D/g, "");
     const baseOk =
@@ -356,10 +455,187 @@ export const LaboratorioPage: React.FC = () => {
     thirdPartyConsent,
   ]);
 
-  const formatDateDisplay = (isoDate: string): string => {
-    if (!isoDate) return "dd/mm/aaaa";
-    const parts = isoDate.split("-");
-    return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : isoDate;
+  // Persiste el avance del Paso 1 (Estudio + Clínica + Horario) en el backend para mantener contexto omnicanal
+  const persistStep1ToBackend = async (nextStep: WizardStep, pauseAfter = false) => {
+    if (!selectedStudy) return;
+    setSyncingStep(true);
+    setSubmitError(null);
+    setDraftNotice(null);
+
+    const webSessionId = getOrCreateWebSessionId();
+    const rawPhone = telefono || loggedPatient?.telefono || "";
+    const phoneDigits = rawPhone.replace(/\D/g, "");
+    const validPhone = phoneDigits.length >= 10 ? normalizedPhoneForSubmit(rawPhone) : undefined;
+    const rawCurp = (!forThirdParty ? curp : loggedPatient?.curp) || "";
+    const validCurp = rawCurp.trim().length === 18 ? rawCurp.trim().toUpperCase() : undefined;
+
+    try {
+      const quoteRes = await api.quoteWebStudy({
+        caseId: activeCase?.id,
+        expectedVersion: activeCase?.version,
+        webSessionId,
+        ...(validPhone ? { telefono: validPhone } : {}),
+        ...(validCurp ? { curp: validCurp } : {}),
+        ...(nombres.trim() || loggedPatient?.nombres
+          ? { nombres: (!forThirdParty ? nombres.trim() : loggedPatient?.nombres || undefined) }
+          : {}),
+        ...(apellidoPaterno.trim() || loggedPatient?.apellido_paterno
+          ? {
+              apellido_paterno: !forThirdParty
+                ? apellidoPaterno.trim()
+                : loggedPatient?.apellido_paterno || undefined,
+            }
+          : {}),
+        studyCode: selectedStudy.code,
+        clinicId: selectedClinic?.id,
+        preferredSlot: {
+          date: preferredDate,
+          time: preferredTime,
+        },
+      });
+
+      if (validPhone) setLastPatientPhone(validPhone);
+      let latestCase = quoteRes.case;
+
+      if (pauseAfter) {
+        const paused = await api.abandonWebCase({
+          caseId: latestCase.id,
+          expectedVersion: latestCase.version,
+          reason: "PATIENT_PAUSED_AT_STEP_1",
+        });
+        latestCase = paused.case;
+        setDraftNotice(
+          "Guardamos tu selección de estudio y clínica. Puedes continuar después aquí, por WhatsApp o en Call Center."
+        );
+      }
+
+      setActiveCase(latestCase);
+      setPendingResumeCase(null);
+      saveBookingDraft({
+        caseId: latestCase.id,
+        webSessionId,
+        step: nextStep,
+        selectedStudyCode: selectedStudy.code,
+        selectedClinicId: selectedClinic?.id,
+        preferredDate,
+        preferredTime,
+        forThirdParty,
+        relationship,
+        thirdPartyConsent,
+        nombres,
+        apellidoPaterno,
+        apellidoMaterno,
+        fechaNacimiento,
+        genero,
+        estadoNacimientoCode,
+        pais,
+        curp,
+        telefono,
+        paymentMethod,
+        updatedAt: new Date().toISOString(),
+        updatedByChannel: "WEB",
+      });
+
+      if (!pauseAfter) {
+        setStep(nextStep);
+        window.scrollTo({ top: 0 });
+      }
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : "No fue posible sincronizar el estudio seleccionado."
+      );
+    } finally {
+      setSyncingStep(false);
+    }
+  };
+
+  // Guarda avance parcial del Paso 2 (Pre-registro) para continuar en Call Center u otro canal
+  const handleSaveStep2Draft = async () => {
+    if (!selectedStudy) return;
+    setSavingLater(true);
+    setSubmitError(null);
+    setDraftNotice(null);
+
+    const webSessionId = getOrCreateWebSessionId();
+    const phoneDigits = telefono.replace(/\D/g, "");
+    const validPhone = phoneDigits.length >= 10 ? normalizedPhoneForSubmit(telefono) : undefined;
+    const validCurp = curp.trim().length === 18 ? curp.trim().toUpperCase() : undefined;
+    const stateObj = MEXICAN_STATES.find((st) => st.code === estadoNacimientoCode);
+
+    try {
+      if (!forThirdParty && (nombres.trim() || apellidoPaterno.trim() || validPhone || validCurp)) {
+        await api.registerWebPatient({
+          ...(nombres.trim() ? { nombres: nombres.trim() } : {}),
+          ...(apellidoPaterno.trim() ? { apellido_paterno: apellidoPaterno.trim() } : {}),
+          ...(apellidoMaterno.trim() ? { apellido_materno: apellidoMaterno.trim() } : {}),
+          ...(fechaNacimiento.length === 10 ? { fecha_nacimiento: fechaNacimiento } : {}),
+          ...(genero ? { genero } : {}),
+          ...(stateObj ? { estado_nacimiento: stateObj.name } : {}),
+          pais,
+          ...(validCurp ? { curp: validCurp } : {}),
+          ...(validPhone ? { telefono: validPhone } : {}),
+          email: loggedPatient?.email || undefined,
+          webSessionId,
+        });
+      }
+
+      const quoteRes = await api.quoteWebStudy({
+        caseId: activeCase?.id,
+        expectedVersion: activeCase?.version,
+        webSessionId,
+        ...(validPhone ? { telefono: validPhone } : {}),
+        ...(validCurp && !forThirdParty ? { curp: validCurp } : {}),
+        ...(nombres.trim() && !forThirdParty ? { nombres: nombres.trim() } : {}),
+        ...(apellidoPaterno.trim() && !forThirdParty
+          ? { apellido_paterno: apellidoPaterno.trim() }
+          : {}),
+        studyCode: selectedStudy.code,
+        clinicId: selectedClinic?.id,
+        preferredSlot: { date: preferredDate, time: preferredTime },
+      });
+
+      const paused = await api.abandonWebCase({
+        caseId: quoteRes.case.id,
+        expectedVersion: quoteRes.case.version,
+        reason: "PATIENT_PAUSED_AT_STEP_2",
+      });
+
+      if (validPhone) setLastPatientPhone(validPhone);
+      setActiveCase(paused.case);
+      saveBookingDraft({
+        caseId: paused.case.id,
+        webSessionId,
+        step: 2,
+        selectedStudyCode: selectedStudy.code,
+        selectedClinicId: selectedClinic?.id,
+        preferredDate,
+        preferredTime,
+        forThirdParty,
+        relationship,
+        thirdPartyConsent,
+        nombres,
+        apellidoPaterno,
+        apellidoMaterno,
+        fechaNacimiento,
+        genero,
+        estadoNacimientoCode,
+        pais,
+        curp,
+        telefono,
+        paymentMethod,
+        updatedAt: new Date().toISOString(),
+        updatedByChannel: "WEB",
+      });
+      setDraftNotice(
+        "Guardamos tu avance en pre-registro. Un asesor de Call Center o tú mismo pueden continuar exactamente en este paso."
+      );
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error ? err.message : "No fue posible guardar tu borrador de pre-registro."
+      );
+    } finally {
+      setSavingLater(false);
+    }
   };
 
   const handleSubmitProfileAndQuote = async (e: React.FormEvent) => {
@@ -368,6 +644,7 @@ export const LaboratorioPage: React.FC = () => {
 
     setSubmitting(true);
     setSubmitError(null);
+    setDraftNotice(null);
     const webSessionId = getOrCreateWebSessionId();
     const phone = normalizedPhoneForSubmit(telefono);
     const stateObj = MEXICAN_STATES.find((st) => st.code === estadoNacimientoCode);
@@ -426,8 +703,33 @@ export const LaboratorioPage: React.FC = () => {
 
       setLastPatientPhone(phone);
       setActiveCase(quoteRes.case);
+      setPendingResumeCase(null);
       setSavedForLater(false);
       setConfirmedFolio(null);
+      saveBookingDraft({
+        caseId: quoteRes.case.id,
+        webSessionId,
+        step: 3,
+        selectedStudyCode: selectedStudy.code,
+        selectedClinicId: selectedClinic?.id,
+        preferredDate,
+        preferredTime,
+        forThirdParty,
+        relationship,
+        thirdPartyConsent,
+        nombres,
+        apellidoPaterno,
+        apellidoMaterno,
+        fechaNacimiento,
+        genero,
+        estadoNacimientoCode,
+        pais,
+        curp,
+        telefono: phone,
+        paymentMethod,
+        updatedAt: new Date().toISOString(),
+        updatedByChannel: "WEB",
+      });
       setStep(3);
       window.scrollTo({ top: 0 });
     } catch (err) {
@@ -468,6 +770,7 @@ export const LaboratorioPage: React.FC = () => {
         paymentMethod,
       });
       setActiveCase(res.case);
+      clearBookingDraft(res.case.id);
       setConfirmedFolio({ folio: res.folio, qrPayload: res.qrPayload });
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "No fue posible confirmar tu cita.");
@@ -502,6 +805,45 @@ export const LaboratorioPage: React.FC = () => {
             </p>
           )}
         </div>
+
+        {/* Aviso para retomar un trámite abierto sin perder contexto */}
+        {pendingResumeCase && !activeCase && (
+          <div className="border-l-2 border-[#00875A] pl-4 py-1 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <p className="text-[#1F2933]">
+              <strong className="text-[#00875A]">Trámite en curso detectado:</strong>{" "}
+              {pendingResumeCase.contextJson.study?.name || "Estudio pendiente"}
+              {pendingResumeCase.contextJson.clinic?.name
+                ? ` en ${pendingResumeCase.contextJson.clinic.name}`
+                : ""}{" "}
+              (último canal: {pendingResumeCase.currentChannel}).
+            </p>
+            <div className="flex items-center gap-4">
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const resumed = await api.resumeWebCase(pendingResumeCase.id);
+                    hydrateFromCase(resumed.case);
+                    setPendingResumeCase(null);
+                  } catch {
+                    hydrateFromCase(pendingResumeCase);
+                    setPendingResumeCase(null);
+                  }
+                }}
+                className="font-semibold text-[#00875A] hover:underline"
+              >
+                Continuar donde me quedé →
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingResumeCase(null)}
+                className="text-[#52606D] hover:text-[#1F2933]"
+              >
+                Iniciar nuevo
+              </button>
+            </div>
+          </div>
+        )}
 
         <ol className="grid grid-cols-3 border-t border-b border-[#E4E7EB]">
           {[
@@ -548,10 +890,15 @@ export const LaboratorioPage: React.FC = () => {
         </p>
       )}
 
+      {draftNotice && (
+        <p className="border-l-2 border-[#00875A] pl-4 py-2 text-sm text-[#00875A]">
+          {draftNotice}
+        </p>
+      )}
+
       {/* ==================== PASO 1: ESTUDIO, PREPARACIÓN Y CLÍNICA ==================== */}
       {step === 1 && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
-          {/* Columna izquierda: Catálogo en lista vertical + Clínica y horarios en cuadrícula plana */}
           <div className="lg:col-span-8 space-y-12">
             <section className="space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
@@ -571,7 +918,6 @@ export const LaboratorioPage: React.FC = () => {
                 />
               </div>
 
-              {/* Filtros de categoría planos con indicador inferior verde */}
               <div className="flex flex-wrap gap-5 border-b border-[#E4E7EB]">
                 {categories.map((cat) => {
                   const active = selectedCategory === cat;
@@ -641,7 +987,6 @@ export const LaboratorioPage: React.FC = () => {
               )}
             </section>
 
-            {/* Selección de clínica en lista vertical limpia + horarios en cuadrícula plana 1px */}
             <section className="space-y-6">
               <div className="pb-4 border-b border-[#E4E7EB]">
                 <h2 className="text-xl font-bold text-[#1F2933]">
@@ -703,7 +1048,7 @@ export const LaboratorioPage: React.FC = () => {
                 </div>
                 <div className="sm:col-span-7">
                   <p className="text-xs font-semibold text-[#1F2933] mb-2">Horario preferido</p>
-                  <div className="grid grid-cols-4 sm:grid-cols-4 border-t border-l border-[#E4E7EB]">
+                  <div className="grid grid-cols-4 border-t border-l border-[#E4E7EB]">
                     {TIME_SLOTS.map((slot) => {
                       const active = preferredTime === slot;
                       return (
@@ -727,7 +1072,6 @@ export const LaboratorioPage: React.FC = () => {
             </section>
           </div>
 
-          {/* Columna derecha: Detalle, preparación (<ol>), precio y botón principal naranja */}
           <aside className="lg:col-span-4 lg:border-l lg:border-[#E4E7EB] lg:pl-8 lg:sticky lg:top-24 space-y-6">
             <h2 className="text-lg font-bold text-[#1F2933] pb-3 border-b border-[#E4E7EB]">
               Resumen y preparación
@@ -782,17 +1126,31 @@ export const LaboratorioPage: React.FC = () => {
               </>
             )}
 
-            <button
-              type="button"
-              disabled={!selectedStudy || !selectedClinic}
-              onClick={() => {
-                setStep(2);
-                window.scrollTo({ top: 0 });
-              }}
-              className="w-full h-12 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] text-sm font-semibold transition-colors disabled:opacity-50"
-            >
-              Continuar al pre-registro
-            </button>
+            {submitError && (
+              <p className="border-l-2 border-[#B42318] pl-3 text-xs text-[#B42318]">
+                {submitError}
+              </p>
+            )}
+
+            <div className="space-y-3">
+              <button
+                type="button"
+                disabled={!selectedStudy || !selectedClinic || syncingStep}
+                onClick={() => persistStep1ToBackend(2, false)}
+                className="w-full h-12 bg-[#E86A17] hover:bg-[#CF5B0E] text-[#FFFFFF] text-sm font-semibold transition-colors disabled:opacity-50"
+              >
+                {syncingStep ? "Guardando avance..." : "Continuar al pre-registro"}
+              </button>
+
+              <button
+                type="button"
+                disabled={!selectedStudy || !selectedClinic || syncingStep}
+                onClick={() => persistStep1ToBackend(1, true)}
+                className="w-full h-11 border border-[#E4E7EB] bg-[#FFFFFF] hover:border-[#1F2933] text-xs font-semibold text-[#1F2933] transition-colors disabled:opacity-50"
+              >
+                Guardar y continuar después
+              </button>
+            </div>
           </aside>
         </div>
       )}
@@ -808,7 +1166,6 @@ export const LaboratorioPage: React.FC = () => {
             ← Cambiar estudio o clínica ({selectedStudy?.name})
           </button>
 
-          {/* Selector ¿Para quién es este estudio? */}
           <section className="space-y-4 pb-6 border-b border-[#E4E7EB]">
             <h2 className="text-lg font-bold text-[#1F2933]">¿Para quién es este estudio?</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 border border-[#E4E7EB]">
@@ -916,7 +1273,6 @@ export const LaboratorioPage: React.FC = () => {
             </p>
           )}
 
-          {/* Formulario oficial "Perfil del paciente" */}
           <form onSubmit={handleSubmitProfileAndQuote} className="space-y-6">
             <div>
               <h2 className="text-xl font-bold text-[#1F2933]">
@@ -1157,8 +1513,16 @@ export const LaboratorioPage: React.FC = () => {
               )}
             </div>
 
-            <div className="pt-4 border-t border-[#E4E7EB] flex items-center justify-between gap-4">
-              <p className="text-xs text-[#52606D]">* Campos obligatorios</p>
+            <div className="pt-4 border-t border-[#E4E7EB] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <button
+                type="button"
+                disabled={savingLater || submitting}
+                onClick={handleSaveStep2Draft}
+                className="h-12 px-5 border border-[#E4E7EB] bg-[#FFFFFF] hover:border-[#1F2933] text-sm font-semibold text-[#1F2933] transition-colors disabled:opacity-50"
+              >
+                {savingLater ? "Guardando avance..." : "Guardar y continuar después"}
+              </button>
+
               <button
                 type="submit"
                 disabled={!isProfileValid || submitting}
@@ -1202,10 +1566,7 @@ export const LaboratorioPage: React.FC = () => {
                   >
                     Ver en mis citas
                   </Link>
-                  <Link
-                    to="/"
-                    className="text-sm font-semibold text-[#00875A] hover:underline"
-                  >
+                  <Link to="/" className="text-sm font-semibold text-[#00875A] hover:underline">
                     Volver al inicio
                   </Link>
                 </div>
@@ -1236,10 +1597,7 @@ export const LaboratorioPage: React.FC = () => {
                   >
                     {loggedPatient ? "Ir a mis citas" : "Crear cuenta para ver mis citas"}
                   </Link>
-                  <Link
-                    to="/"
-                    className="text-sm font-semibold text-[#00875A] hover:underline"
-                  >
+                  <Link to="/" className="text-sm font-semibold text-[#00875A] hover:underline">
                     Volver al inicio
                   </Link>
                 </div>
@@ -1408,14 +1766,22 @@ const PaymentOptionRow: React.FC<PaymentOptionRowProps> = ({
       className="w-full text-left py-4 pl-4 pr-2 flex items-start justify-between gap-4 hover:bg-[#F7F8F9] transition-colors"
     >
       <div>
-        <strong className={`block text-sm font-semibold ${selected ? "text-[#00875A]" : "text-[#1F2933]"}`}>
+        <strong
+          className={`block text-sm font-semibold ${
+            selected ? "text-[#00875A]" : "text-[#1F2933]"
+          }`}
+        >
           {title}
         </strong>
         <p className="text-xs text-[#52606D] mt-1">{subtitle}</p>
       </div>
       <div className="text-right shrink-0">
         {note && <strong className="block text-xs font-semibold text-[#00875A]">{note}</strong>}
-        <small className={`block text-xs mt-0.5 ${selected ? "text-[#00875A] font-semibold" : "text-[#52606D]"}`}>
+        <small
+          className={`block text-xs mt-0.5 ${
+            selected ? "text-[#00875A] font-semibold" : "text-[#52606D]"
+          }`}
+        >
           {selected ? "Seleccionado" : "Elegir"}
         </small>
       </div>
